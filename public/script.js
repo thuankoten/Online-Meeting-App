@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.71.1:3000", { secure: true });
+const socket = io("https://192.168.1.7:3000", { secure: true });
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");
@@ -114,20 +114,23 @@ function showMeetingView() {
     document.getElementById("meeting").style.display = "grid";
     document.getElementById("controls").style.display = "flex";
     currentRoomId.textContent = roomId; // Hiển thị mã phòng hiện tại
+    updateFloatingCopyVisibility();
 }
 
 function showHomeView() {
     document.getElementById("home").style.display = "flex";
     document.getElementById("meeting").style.display = "none";
     document.getElementById("controls").style.display = "none";
+    updateFloatingCopyVisibility();
 }
 
 // ===================
 // Create Room
 // ===================
 createBtn.onclick = () => {
-    const r = Math.random().toString(36).substr(2, 6).toUpperCase();
-    const p = Math.random().toString(36).substr(2, 6);
+    // mã phòng và mật khẩu là số ngẫu nhiên 6 chữ số
+    const r = String(Math.floor(100000 + Math.random() * 900000)); // 100000-999999
+    const p = String(Math.floor(100000 + Math.random() * 900000));
 
     roomIdInput.value = r;
     roomPasswordInput.value = p;
@@ -135,7 +138,6 @@ createBtn.onclick = () => {
     socket.emit("createRoom", { roomId: r, password: p }, res => {
         if (res.success) {
             alert(`Tạo phòng thành công!\nMã phòng: ${r}\nMật khẩu: ${p}`);
-            joinBtn.onclick(); // Tự động join sau create
         } else alert(res.message);
     });
 };
@@ -174,6 +176,49 @@ copyRoomBtn.onclick = () => {
     alert("Đã copy!");
 };
 
+// floating copy button behavior
+const copyRoomFloatingBtn = document.getElementById("copyRoomFloatingBtn");
+function updateFloatingCopyVisibility() {
+    // show only when in meeting view
+    if (document.getElementById("meeting").style.display !== "none") copyRoomFloatingBtn.classList.add("visible");
+    else copyRoomFloatingBtn.classList.remove("visible");
+}
+updateFloatingCopyVisibility(); // initial
+
+// call updateFloatingCopyVisibility when switching views
+function showMeetingView() {
+    document.getElementById("home").style.display = "none";
+    document.getElementById("meeting").style.display = "grid";
+    document.getElementById("controls").style.display = "flex";
+    currentRoomId.textContent = roomId;
+    updateFloatingCopyVisibility();
+}
+
+function showHomeView() {
+    document.getElementById("home").style.display = "flex";
+    document.getElementById("meeting").style.display = "none";
+    document.getElementById("controls").style.display = "none";
+    updateFloatingCopyVisibility();
+}
+
+// floating copy action
+copyRoomFloatingBtn.onclick = () => {
+    const rid = roomId || roomIdInput.value || currentRoomId.textContent || "";
+    const pwd = roomPasswordInput.value || "";
+    if (!rid && !pwd) {
+        alert("Không có mã phòng / mật khẩu để copy.");
+        return;
+    }
+    navigator.clipboard.writeText(`Mã phòng: ${rid}\nMật khẩu: ${pwd}`).then(() => {
+        alert("Đã copy mã phòng và mật khẩu!");
+    }).catch(() => {
+        alert("Không thể copy vào clipboard.");
+    });
+};
+
+// ensure visibility updates when leaving/joining
+// already existing calls to showMeetingView/showHomeView will handle it
+
 // ===================
 // Chat
 // ===================
@@ -184,11 +229,25 @@ sendBtn.onclick = () => {
     chatInput.value = "";
 };
 
+// small helper to avoid HTML injection
+function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+}
+
 socket.on("chatMessage", ({ id, name, text, time }) => {
     const item = document.createElement("div");
     const t = new Date(time).toLocaleTimeString();
     item.className = id === socket.id ? "chat-item chat-me" : "chat-item";
-    item.textContent = `[${t}] ${name}: ${text}`;
+    // structured content so CSS can style pieces
+    item.innerHTML = `
+        <div class="meta"><span class="time">${escapeHtml(t)}</span><span class="name">${escapeHtml(name)}</span></div>
+        <div class="text">${escapeHtml(text)}</div>
+    `;
     chatMessages.appendChild(item);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 });
