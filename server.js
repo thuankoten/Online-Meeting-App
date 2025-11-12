@@ -8,8 +8,8 @@ console.log("Starting HTTPS server...");
 const app = express();
 app.use(express.static('public'));
 
-let keyPath = '192.168.153.1+2-key.pem';
-let certPath = '192.168.153.1+2.pem';
+let keyPath = '192.168.1.11+2-key.pem';
+let certPath = '192.168.1.11+2.pem';
 let server;
 try {
   server = https.createServer({
@@ -156,15 +156,22 @@ io.on('connection', socket => {
   });
 
   // Update peer status
-  socket.on('updateStatus', ({ id, status } = {}) => {
+  // Update peer status (camera on/off)
+socket.on('updateStatus', ({ id, status } = {}) => {
     const room = rooms[socket.data.roomId];
     if (!room || !room.members[id]) return;
     room.members[id].status = status;
-    socket.to(socket.data.roomId).emit('peer-status-update', { id, status });
-    io.to(socket.data.roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
-      id, name: info.name, status: info.status
-    })));
-  });
+    io.to(socket.data.roomId).emit('peer-status-update', { id, status });
+    io.to(socket.data.roomId).emit(
+        'memberList',
+        Object.entries(room.members).map(([mid, info]) => ({
+            id: mid,
+            name: info.name,
+            status: info.status
+        }))
+    );
+});
+
 
   // Chat
   socket.on('chatMessage', msg => {
@@ -320,4 +327,4 @@ socket.on('start-sharing', ({ name } = {}) => {
 
 
 const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.153.1:${PORT}`));
+server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.11:${PORT}`));

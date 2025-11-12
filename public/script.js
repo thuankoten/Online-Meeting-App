@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.153.1:3000", { secure: true });
+const socket = io("https://192.168.1.11:3000", { secure: true });
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");
@@ -45,32 +45,45 @@ function createVideoCard(id, name, stream = null, muted = false) {
     wrap.className = "cam-card";
     wrap.id = "cam-" + id;
 
+    // === VIDEO ===
     const video = document.createElement("video");
     video.autoplay = true;
     video.playsInline = true;
     video.muted = muted;
-
-    wrap.appendChild(video);
-
-    const label = document.createElement("div");
-    label.className = "cam-overlay";
-    wrap.appendChild(label);
-
-    function updateLabel() {
-        label.textContent = stream ? name : `${name} (chưa kết nối)`;
-    }
-
     if (stream) video.srcObject = stream;
 
+    // === AVATAR ===
+    const avatar = document.createElement("div");
+    avatar.className = "avatar-placeholder";
+    avatar.textContent = (name?.charAt(0) || "?").toUpperCase();
+    if (stream) avatar.style.display = "none";
+
+    // === OVERLAY (hiển thị tên) ===
+    const label = document.createElement("div");
+    label.className = "cam-overlay";
+    label.textContent = name || "Người dùng";
+
+    wrap.appendChild(video);
+    wrap.appendChild(avatar);
+    wrap.appendChild(label);
+
     wrap.updateStream = function (newStream) {
-        stream = newStream;
-        video.srcObject = newStream;
-        updateLabel();
+        if (newStream) {
+            video.srcObject = newStream;
+            video.style.display = "block";
+            avatar.style.display = "none";
+        } else {
+            video.srcObject = null;
+            video.style.display = "none";
+            avatar.style.display = "flex";
+        }
     };
 
-    updateLabel();
     return wrap;
 }
+
+
+
 
 async function startLocalMedia() {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -287,6 +300,25 @@ socket.on("memberList", members => {
             createPeer(m.id, m.name, false);
         }
     });
+});
+
+// ===================
+// Khi người khác bật/tắt camera
+// ===================
+socket.on("peer-status-update", ({ id, status }) => {
+    const card = document.getElementById("cam-" + id);
+    if (!card) return;
+
+    const video = card.querySelector("video");
+    const avatar = card.querySelector(".avatar-placeholder");
+
+    if (status === "off") {
+        if (video) video.style.display = "none";
+        if (avatar) avatar.style.display = "flex";
+    } else {
+        if (video) video.style.display = "block";
+        if (avatar) avatar.style.display = "none";
+    }
 });
 
 socket.on("user-connected", ({ id, name }) => {
@@ -509,16 +541,40 @@ leaveBtn.onclick = () => {
 // ===================
 // Audio / Video / Share Screen
 // ===================
+// ===================
+// Audio / Video / Share Screen (có avatar khi tắt cam)
+// ===================
 toggleVideoBtn.onclick = () => {
     const track = localStream.getVideoTracks()[0];
     track.enabled = !track.enabled;
     toggleVideoBtn.textContent = track.enabled ? "Tắt Camera" : "Mở Camera";
+
+    // Gửi trạng thái camera lên server
+    socket.emit("updateStatus", {
+        id: socket.id,
+        status: track.enabled ? "on" : "off"
+    });
+
+    // Cập nhật giao diện local ngay
+    const myCard = document.getElementById("cam-me");
+    if (myCard) {
+        const video = myCard.querySelector("video");
+        const avatar = myCard.querySelector(".avatar-placeholder");
+        if (track.enabled) {
+            video.style.display = "block";
+            avatar.style.display = "none";
+        } else {
+            video.style.display = "none";
+            avatar.style.display = "flex";
+        }
+    }
 };
 toggleAudioBtn.onclick = () => {
     const track = localStream.getAudioTracks()[0];
     track.enabled = !track.enabled;
     toggleAudioBtn.textContent = track.enabled ? "Tắt Micro" : "Mở Micro";
 };
+
 
 let handRaised = false;
 
@@ -528,6 +584,22 @@ raiseHandBtn.onclick = () => {
     raiseHandBtn.classList.toggle("raised", handRaised);
     socket.emit("raiseHand", { raised: handRaised });
 };
+
+socket.on("peer-status-update", ({ id, status }) => {
+    const card = document.getElementById("cam-" + id);
+    if (!card) return;
+
+    const video = card.querySelector("video");
+    const avatar = card.querySelector(".avatar-placeholder");
+
+    if (status === "off") {
+        if (video) video.style.display = "none";
+        if (avatar) avatar.style.display = "flex";
+    } else {
+        if (video) video.style.display = "block";
+        if (avatar) avatar.style.display = "none";
+    }
+});
 
 shareScreenBtn.onclick = async () => {
     if (myScreenShareId) {
