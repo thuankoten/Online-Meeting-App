@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.1.11:3000", { secure: true });
+const socket = io("https://192.168.153.1:3000", { secure: true });
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");

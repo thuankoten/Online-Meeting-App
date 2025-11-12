@@ -1,4 +1,4 @@
-const fs = require('fs');
+ const fs = require('fs');
 const https = require('https');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -8,8 +8,8 @@ console.log("Starting HTTPS server...");
 const app = express();
 app.use(express.static('public'));
 
-let keyPath = '192.168.1.11+2-key.pem';
-let certPath = '192.168.1.11+2.pem';
+let keyPath = '192.168.153.1+2-key.pem';
+let certPath = '192.168.153.1+2.pem';
 let server;
 try {
   server = https.createServer({
@@ -320,4 +320,4 @@ socket.on('start-sharing', ({ name } = {}) => {
 
 
 const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.11:${PORT}`));
+server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.153.1:${PORT}`));

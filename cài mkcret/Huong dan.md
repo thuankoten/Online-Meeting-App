@@ -17,5 +17,5 @@ node -v // kiểm tra đã cài node js chưa
 npm -v
 npm install
 
-
+mkcert 192.168.153.1 localhost 127.0.0.1
 Cách chạy code : node server.js
