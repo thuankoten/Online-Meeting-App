@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.5.60:3000", { secure: true });
+const socket = io("https://192.168.1.11:3000", { secure: true });
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");
@@ -23,6 +23,7 @@ const toggleAudioBtn = document.getElementById("toggleAudio");
 const shareScreenBtn = document.getElementById("shareScreenBtn");
 const leaveBtn = document.getElementById("leaveBtn");
 const currentRoomId = document.getElementById("currentRoomId");
+const raiseHandBtn = document.getElementById("raiseHandBtn");
 
 // ===== State =====
 let localStream = null;
@@ -276,8 +277,15 @@ socket.on("memberList", members => {
     membersList.innerHTML = "";
     members.forEach(m => {
         const li = document.createElement("div");
-        li.textContent = m.name + (m.id === socket.id ? " (Bạn)" : "");
+        let displayName = m.name + (m.id === socket.id ? " (Bạn)" : "");
+        if (m.handRaised) displayName += " ✋"; // hiện biểu tượng
+        li.textContent = displayName;
         membersList.appendChild(li);
+
+        if (m.id !== socket.id && !peers[m.id]) {
+            peers[m.id] = { name: m.name };
+            createPeer(m.id, m.name, false);
+        }
     });
 });
 
@@ -510,6 +518,15 @@ toggleAudioBtn.onclick = () => {
     const track = localStream.getAudioTracks()[0];
     track.enabled = !track.enabled;
     toggleAudioBtn.textContent = track.enabled ? "Tắt Micro" : "Mở Micro";
+};
+
+let handRaised = false;
+
+raiseHandBtn.onclick = () => {
+    handRaised = !handRaised;
+    raiseHandBtn.textContent = handRaised ? "✋ Đang giơ tay" : "✋ Giơ tay";
+    raiseHandBtn.classList.toggle("raised", handRaised);
+    socket.emit("raiseHand", { raised: handRaised });
 };
 
 shareScreenBtn.onclick = async () => {
