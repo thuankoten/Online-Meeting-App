@@ -32,6 +32,9 @@ let myName = null;
 let joined = false;
 let canChat = false;
 let localScreenCard = null;
+let screenPeers = {}; // { targetSocketId : pc }
+let localScreenStream = null;
+let myScreenShareId = null;
 
 // ===================
 // Helper
@@ -262,18 +265,80 @@ socket.on("memberList", members => {
         const li = document.createElement("div");
         li.textContent = m.name + (m.id === socket.id ? " (Bạn)" : "");
         membersList.appendChild(li);
-
-        if (m.id !== socket.id && !peers[m.id]) {
-            peers[m.id] = { name: m.name };
-            createPeer(m.id, m.name, false);
-        }
     });
 });
 
 socket.on("user-connected", ({ id, name }) => {
-    peers[id] = { pc: null, el: createVideoCard(id, name), name };
-    videoGrid.appendChild(peers[id].el);
-    createPeer(id, name, true);
+    if (id.endsWith("_screen")) {
+        // == Đây là một MÀN HÌNH ==
+        console.log("Một màn hình đã tham gia:", name);
+        // Chỉ tạo thẻ video, không tạo peer
+        peers[id] = { pc: null, el: createVideoCard(id, name), name };
+        peers[id].el.classList.add("is-sharing"); // Thêm CSS
+        videoGrid.appendChild(peers[id].el);
+        // Chúng ta sẽ đợi tín hiệu 'offer' TỪ màn hình này
+    } else {
+        // == Đây là một NGƯỜI DÙNG thật ==
+        console.log("Một người dùng đã tham gia:", name);
+        // Logic cũ: tạo thẻ video VÀ chủ động tạo peer
+        peers[id] = { pc: null, el: createVideoCard(id, name), name };
+        videoGrid.appendChild(peers[id].el);
+        createPeer(id, name, true); // true = initiator
+
+        // KHI CHÚNG TA ĐANG CHIA SẺ, và có người mới vào
+        if (myScreenShareId && localScreenStream) {
+            console.log("Tạo kết nối màn hình cho người mới:", name);
+            const vTrack = localScreenStream.getTracks().find(t => t.kind === 'video');
+            const aTrack = localScreenStream.getTracks().find(t => t.kind === 'audio');
+            const pc = createScreenPeer(id, vTrack, aTrack);
+            screenPeers[id] = pc;
+        }
+    }
+});
+
+socket.on("user-disconnected", id => {
+    if (id.endsWith("_screen")) {
+        // Màn hình đã thoát
+        console.log("Màn hình đã thoát:", id);
+        peers[id]?.pc?.close();
+        peers[id]?.el?.remove();
+        delete peers[id];
+    } else {
+        // Người dùng thật đã thoát
+        console.log("Người dùng đã thoát:", id);
+        peers[id]?.pc?.close();
+        peers[id]?.el?.remove();
+        delete peers[id];
+        
+        // Dọn dẹp kết nối màn hình ĐẾN người này (nếu có)
+        if (screenPeers[id]) {
+            console.log("Dọn dẹp screen peer cho:", id);
+            screenPeers[id].close();
+            delete screenPeers[id];
+        }
+    }
+});
+socket.on('sharing-started-you', ({ screenShareId }) => {
+    console.log("Server xác nhận, ID màn hình của tôi là:", screenShareId);
+    myScreenShareId = screenShareId;
+
+    // Tạo card video local cho màn hình
+    const myScreenCard = createVideoCard(screenShareId, "Màn hình của tôi", localScreenStream, true);
+    myScreenCard.classList.add("is-sharing");
+    videoGrid.prepend(myScreenCard); // Đặt lên đầu
+
+    // Lấy track
+    const vTrack = localScreenStream.getTracks().find(t => t.kind === 'video');
+    const aTrack = localScreenStream.getTracks().find(t => t.kind === 'audio');
+    
+    // Tạo kết nối màn hình đến TẤT CẢ user thật đang có
+    for (const id in peers) {
+        // Chỉ kết nối đến user thật (không phải màn hình)
+        if (!id.endsWith("_screen")) {
+            const pc = createScreenPeer(id, vTrack, aTrack);
+            screenPeers[id] = pc;
+        }
+    }
 });
 
 socket.on("signal", async ({ from, signal }) => {
@@ -305,6 +370,12 @@ socket.on("sharing-state-changed", ({ id, isSharing }) => {
 // Leave Room
 // ===================
 leaveBtn.onclick = () => {
+    // Dừng chia sẻ màn hình NẾU có
+    if (myScreenShareId) {
+        stopScreenShare();
+    }
+    
+    // Logic dọn dẹp cũ (giữ nguyên)
     Object.values(peers).forEach(p => p.pc?.close());
     peers = {};
     localStream?.getTracks().forEach(t => t.stop());
@@ -313,9 +384,11 @@ leaveBtn.onclick = () => {
     chatMessages.innerHTML = "";
     joined = false;
     canChat = false;
-    socket.emit("leaveRoom");
+    // socket.emit("leaveRoom"); // Dòng này không cần thiết
+    socket.disconnect(); // Ngắt kết nối luôn
     showHomeView(); // Quay về trang chủ
     statusText.textContent = "Đã rời phòng";
+    location.reload(); // Tải lại trang cho chắc
 };
 
 // ===================
@@ -333,47 +406,75 @@ toggleAudioBtn.onclick = () => {
 };
 
 shareScreenBtn.onclick = async () => {
+    if (myScreenShareId) {
+        // Nếu đang chia sẻ, nhấn nút này để DỪNG
+        stopScreenShare();
+        return;
+    }
+
     try {
-        const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-        const track = screen.getTracks()[0];
+        localScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        
+        // Báo cho server biết tôi muốn chia sẻ
+        socket.emit("start-sharing", { name: myName + " (Màn hình)" });
 
-        // --- SỬA LỖI 1: Hiển thị local ---
-        if (localScreenCard) {
-            localScreenCard.remove(); // Xóa card cũ nếu có
-        }
-        localScreenCard = createVideoCard("me-screen", `${myName} (Màn hình)`, screen, true);
-        localScreenCard.classList.add("is-sharing"); // Áp dụng CSS mới
-        videoGrid.prepend(localScreenCard); // Đặt nó lên đầu cho dễ thấy
-
-        // --- SỬA LỖI 2 & 3: Báo cho người khác ---
-        Object.values(peers).forEach(p => {
-            const sender = p.pc.getSenders().find(s => s.track.kind === "video");
-            sender.replaceTrack(track);
-        });
-
-        // Báo server: "Tôi đang share"
-        socket.emit("set-sharing-state", true);
-
-        // Khi người dùng nhấn nút "Stop sharing" của trình duyệt
-        track.onended = () => {
-            // Dọn dẹp local
-            if (localScreenCard) {
-                localScreenCard.remove();
-                localScreenCard = null;
-            }
-
-            // Trả camera về cho mọi người
-            const cam = localStream.getVideoTracks()[0];
-            Object.values(peers).forEach(p => {
-                const sender = p.pc.getSenders().find(s => s.track.kind === "video");
-                sender.replaceTrack(cam);
-            });
-
-            // Báo server: "Tôi dừng share"
-            socket.emit("set-sharing-state", false);
+        // Lắng nghe sự kiện "Stop" từ nút của trình duyệt
+        localScreenStream.getTracks()[0].onended = () => {
+            stopScreenShare();
         };
 
     } catch (err) {
-        console.error("Lỗi chia sẻ màn hình:", err);
+        console.error("Lỗi getDisplayMedia:", err);
     }
 };
+function createScreenPeer(targetId, vTrack, aTrack) {
+    console.log("Đang tạo screen peer đến:", targetId);
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+    if (vTrack) pc.addTrack(vTrack, localScreenStream);
+    if (aTrack) pc.addTrack(aTrack, localScreenStream);
+
+    pc.onnegotiationneeded = async () => {
+        try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            // Gửi offer bằng kênh tín hiệu MÀN HÌNH
+            socket.emit("signal-screen", { 
+                to: targetId, 
+                signal: pc.localDescription 
+            });
+        } catch (err) {
+            console.error("Lỗi onnegotiationneeded (screen):", err);
+        }
+    };
+
+    pc.onicecandidate = ev => {
+        if (ev.candidate) {
+            socket.emit("signal-screen", { 
+                to: targetId, 
+                signal: { candidate: ev.candidate } 
+            });
+        }
+    };
+    return pc;
+}
+function stopScreenShare() {
+    if (!localScreenStream) return;
+
+    console.log("Đang dừng chia sẻ màn hình...");
+    localScreenStream.getTracks().forEach(t => t.stop());
+    localScreenStream = null;
+
+    // Xóa card local
+    const localScreenCard = document.getElementById('cam-' + myScreenShareId);
+    if (localScreenCard) localScreenCard.remove();
+    
+    myScreenShareId = null;
+
+    // Báo server
+    socket.emit("stop-sharing");
+
+    // Đóng tất cả peer kết nối màn hình
+    Object.values(screenPeers).forEach(pc => pc.close());
+    screenPeers = {};
+}

@@ -170,17 +170,98 @@ io.on('connection', socket => {
 
     console.log(`❌ ${socket.data.userName || socket.id} left (${reason})`);
   });
-    socket.on('set-sharing-state', (isSharing) => {
+socket.on('start-sharing', ({ name } = {}) => {
     const roomId = socket.data.roomId;
-    if (!roomId || !rooms[roomId]) return;
+    const room = rooms[roomId];
+    if (!room) return;
 
-    // Thông báo cho mọi người (trừ mình) trong phòng
-    socket.to(roomId).emit('sharing-state-changed', {
-        id: socket.id, // ID của người đang share
-        isSharing: !!isSharing // true hoặc false
+    const screenShareId = socket.id + '_screen';
+    const screenShareName = name || 'Màn hình';
+
+    // Thêm user ảo vào phòng
+    room.members[screenShareId] = {
+      name: screenShareName,
+      status: 'sharing',
+      realSocketId: socket.id // Liên kết với socket thật
+    };
+
+    // 1. Báo cho CHÍNH BẠN biết ID màn hình của bạn
+    socket.emit('sharing-started-you', { screenShareId });
+
+    // 2. Báo cho NHỮNG NGƯỜI KHÁC có "user" mới
+    socket.to(roomId).emit('user-connected', {
+      id: screenShareId,
+      name: screenShareName
     });
+    
+    // 3. Cập nhật danh sách thành viên cho TẤT CẢ
+    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
+      id, name: info.name, status: info.status
+    })));
+  });
+
+  // === THÊM MỚI: Dừng chia sẻ màn hình ===
+  socket.on('stop-sharing', () => {
+    const roomId = socket.data.roomId;
+    const room = rooms[roomId];
+    if (!room) return;
+
+    const screenShareId = socket.id + '_screen';
+    if (!room.members[screenShareId]) return; // Không có gì để dừng
+
+    // Xóa user ảo
+    delete room.members[screenShareId];
+
+    // Báo mọi người user ảo đã thoát
+    io.to(roomId).emit('user-disconnected', screenShareId);
+
+    // Cập nhật danh sách thành viên
+    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
+      id, name: info.name, status: info.status
+    })));
+  });
+
+  // === THÊM MỚI: Kênh tín hiệu riêng cho màn hình ===
+  socket.on('signal-screen', ({ to, signal }) => {
+    const room = rooms[socket.data.roomId];
+    if (!room) return;
+    
+    const screenShareId = socket.id + '_screen';
+    const screenShareName = room.members[screenShareId]?.name || 'Màn hình';
+
+    // Gửi tín hiệu "offer" hoặc "candidate" ĐẾN người 'to'
+    // NHƯNG nói là nó đến TỪ 'screenShareId'
+    io.to(to).emit('signal', {
+      from: screenShareId,
+      signal,
+      name: screenShareName
+    });
+  });
+
+  // Disconnect
+  socket.on('disconnect', reason => {
+    const roomId = socket.data.roomId;
+    if (!roomId || !rooms[roomId]) {
+      // ... (code 'console.log' giữ nguyên)
+      return;
+    }
+    
+    // === SỬA ĐỔI: Dọn dẹp user ảo NẾU CÓ ===
+    const screenShareId = socket.id + '_screen';
+    if (rooms[roomId].members[screenShareId]) {
+      delete rooms[roomId].members[screenShareId];
+      // Báo những người còn lại là màn hình cũng disconnect
+      socket.to(roomId).emit('user-disconnected', screenShareId);
+    }
+    // ===================================
+
+    delete rooms[roomId].members[socket.id];
+    socket.to(roomId).emit('user-disconnected', socket.id);
+
+    // ... (code 'memberList' và 'if (empty)' giữ nguyên) ...
+  });
 });
-});
+
 
 
 const PORT = 3000;
