@@ -190,6 +190,20 @@ io.on('connection', socket => {
 
     io.to(roomId).emit('chatMessage', message);
   });
+
+    // Raise Hand ✋
+  socket.on('raiseHand', ({ raised } = {}) => {
+    const roomId = socket.data.roomId;
+    if (!roomId || !rooms[roomId]) return;
+    const room = rooms[roomId];
+    room.members[socket.id].handRaised = raised;
+
+    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
+      id,
+      name: info.name,
+      handRaised: info.handRaised || false
+    })));
+  });
   // Disconnect
   socket.on('disconnect', reason => {
     const roomId = socket.data.roomId;
