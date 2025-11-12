@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.1.7:3000", { secure: true });
+const socket = io("https://192.168.5.60:3000", { secure: true });
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");
@@ -31,6 +31,7 @@ let roomId = null;
 let myName = null;
 let joined = false;
 let canChat = false;
+let localScreenCard = null;
 
 // ===================
 // Helper
@@ -87,7 +88,7 @@ function createPeer(id, name, initiator) {
             peers[id].el = createVideoCard(id, name, stream);
             videoGrid.appendChild(peers[id].el);
         } else {
-            peers[id].el.updateStream(stream); // ✅ Quan trọng
+            peers[id].el.updateStream(stream); 
         }
     };
 
@@ -288,6 +289,17 @@ socket.on("signal", async ({ from, signal }) => {
         await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
     }
 });
+socket.on("sharing-state-changed", ({ id, isSharing }) => {
+    const peer = peers[id];
+    if (!peer || !peer.el) return; // Không tìm thấy peer hoặc thẻ video
+
+    // Thêm/xóa class CSS để sửa lỗi cắt xén
+    if (isSharing) {
+        peer.el.classList.add("is-sharing");
+    } else {
+        peer.el.classList.remove("is-sharing");
+    }
+});
 
 // ===================
 // Leave Room
@@ -321,17 +333,47 @@ toggleAudioBtn.onclick = () => {
 };
 
 shareScreenBtn.onclick = async () => {
-    const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    const track = screen.getTracks()[0];
-    Object.values(peers).forEach(p => {
-        const sender = p.pc.getSenders().find(s => s.track.kind === "video");
-        sender.replaceTrack(track);
-    });
-    track.onended = () => {
-        const cam = localStream.getVideoTracks()[0];
+    try {
+        const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        const track = screen.getTracks()[0];
+
+        // --- SỬA LỖI 1: Hiển thị local ---
+        if (localScreenCard) {
+            localScreenCard.remove(); // Xóa card cũ nếu có
+        }
+        localScreenCard = createVideoCard("me-screen", `${myName} (Màn hình)`, screen, true);
+        localScreenCard.classList.add("is-sharing"); // Áp dụng CSS mới
+        videoGrid.prepend(localScreenCard); // Đặt nó lên đầu cho dễ thấy
+
+        // --- SỬA LỖI 2 & 3: Báo cho người khác ---
         Object.values(peers).forEach(p => {
             const sender = p.pc.getSenders().find(s => s.track.kind === "video");
-            sender.replaceTrack(cam);
+            sender.replaceTrack(track);
         });
-    };
+
+        // Báo server: "Tôi đang share"
+        socket.emit("set-sharing-state", true);
+
+        // Khi người dùng nhấn nút "Stop sharing" của trình duyệt
+        track.onended = () => {
+            // Dọn dẹp local
+            if (localScreenCard) {
+                localScreenCard.remove();
+                localScreenCard = null;
+            }
+
+            // Trả camera về cho mọi người
+            const cam = localStream.getVideoTracks()[0];
+            Object.values(peers).forEach(p => {
+                const sender = p.pc.getSenders().find(s => s.track.kind === "video");
+                sender.replaceTrack(cam);
+            });
+
+            // Báo server: "Tôi dừng share"
+            socket.emit("set-sharing-state", false);
+        };
+
+    } catch (err) {
+        console.error("Lỗi chia sẻ màn hình:", err);
+    }
 };

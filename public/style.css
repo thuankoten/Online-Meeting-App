@@ -581,3 +581,15 @@ body {
 
 /* ensure chat scroll padding so last message not hidden behind input */
 #chatMessages { padding-bottom: 18px; }
+
+.cam-card.is-sharing {
+    /* Cho phép chiếm nhiều không gian hơn nếu cần */
+    grid-column: span 2; /* Thử chiếm 2 cột */
+    min-height: 350px;
+    background: #000;
+}
+
+.cam-card.is-sharing video {
+    object-fit: contain; /* QUAN TRỌNG: Sửa lỗi cắt xén */
+    background-color: #111; /* Thêm nền đen cho đẹp */
+}

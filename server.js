@@ -8,8 +8,8 @@ console.log("Starting HTTPS server...");
 const app = express();
 app.use(express.static('public'));
 
-let keyPath = '192.168.1.7+2-key.pem';
-let certPath = '192.168.1.7+2.pem';
+let keyPath = '192.168.5.60+2-key.pem';
+let certPath = '192.168.5.60+2.pem';
 let server;
 try {
   server = https.createServer({
@@ -148,7 +148,6 @@ io.on('connection', socket => {
 
     io.to(roomId).emit('chatMessage', message);
   });
-
   // Disconnect
   socket.on('disconnect', reason => {
     const roomId = socket.data.roomId;
@@ -171,7 +170,18 @@ io.on('connection', socket => {
 
     console.log(`❌ ${socket.data.userName || socket.id} left (${reason})`);
   });
+    socket.on('set-sharing-state', (isSharing) => {
+    const roomId = socket.data.roomId;
+    if (!roomId || !rooms[roomId]) return;
+
+    // Thông báo cho mọi người (trừ mình) trong phòng
+    socket.to(roomId).emit('sharing-state-changed', {
+        id: socket.id, // ID của người đang share
+        isSharing: !!isSharing // true hoặc false
+    });
+});
 });
 
+
 const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.7:${PORT}`));
+server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.5.60:${PORT}`));
