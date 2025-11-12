@@ -85,10 +85,11 @@ function createPeer(id, name, initiator) {
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
     pc.ontrack = ev => {
+        // ... (code ontrack giữ nguyên)
         const stream = ev.streams[0];
-
         if (!peers[id].el) {
             peers[id].el = createVideoCard(id, name, stream);
+            if (id.endsWith("_screen")) peers[id].el.classList.add("is-sharing");
             videoGrid.appendChild(peers[id].el);
         } else {
             peers[id].el.updateStream(stream); 
@@ -96,17 +97,29 @@ function createPeer(id, name, initiator) {
     };
 
     pc.onicecandidate = ev => {
-        if (ev.candidate) socket.emit("signal", { to: id, signal: { candidate: ev.candidate } });
+        if (ev.candidate) {
+            // Gửi candidate. Server sẽ tự động chuyển hướng
+            // nếu 'id' (là 'to') có đuôi là _screen
+            socket.emit("signal", { 
+                to: id, 
+                signal: { candidate: ev.candidate } 
+            });
+        }
     };
 
     if (initiator) {
+        // ... (code onnegotiationneeded giữ nguyên)
         pc.onnegotiationneeded = async () => {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit("signal", { to: id, signal: pc.localDescription });
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                // Cam-cam offer đi qua kênh 'signal'
+                socket.emit("signal", { to: id, signal: pc.localDescription });
+            } catch (err) {
+                console.error("Lỗi onnegotiationneeded (cam):", err);
+            }
         };
     }
-
     return pc;
 }
 
@@ -269,23 +282,26 @@ socket.on("memberList", members => {
 });
 
 socket.on("user-connected", ({ id, name }) => {
-    if (id.endsWith("_screen")) {
-        // == Đây là một MÀN HÌNH ==
-        console.log("Một màn hình đã tham gia:", name);
-        // Chỉ tạo thẻ video, không tạo peer
-        peers[id] = { pc: null, el: createVideoCard(id, name), name };
-        peers[id].el.classList.add("is-sharing"); // Thêm CSS
-        videoGrid.appendChild(peers[id].el);
-        // Chúng ta sẽ đợi tín hiệu 'offer' TỪ màn hình này
-    } else {
-        // == Đây là một NGƯỜI DÙNG thật ==
-        console.log("Một người dùng đã tham gia:", name);
-        // Logic cũ: tạo thẻ video VÀ chủ động tạo peer
-        peers[id] = { pc: null, el: createVideoCard(id, name), name };
-        videoGrid.appendChild(peers[id].el);
-        createPeer(id, name, true); // true = initiator
+    if (peers[id]) return; // Đã xử lý (tránh lặp)
 
-        // KHI CHÚNG TA ĐANG CHIA SẺ, và có người mới vào
+    if (id.endsWith("_screen")) {
+        // Logic màn hình giữ nguyên: chỉ tạo thẻ, chờ offer
+        console.log("Một màn hình đã tham gia:", name);
+        peers[id] = { pc: null, el: createVideoCard(id, name), name };
+        peers[id].el.classList.add("is-sharing"); 
+        videoGrid.appendChild(peers[id].el);
+    } else {
+        // == Đây là một NGƯỜI DÙNG thật MỚI ==
+        console.log("Một người dùng MỚI đã tham gia:", name);
+        
+        // 1. Chỉ tạo thẻ video
+        peers[id] = { pc: null, el: createVideoCard(id, name), name };
+        videoGrid.appendChild(peers[id].el);
+        
+        // 2. KHÔNG GỌI createPeer. 
+        // Chúng ta (người cũ) sẽ chờ người mới (newcomer) gửi 'offer'.
+        
+        // Logic "if (myScreenShareId)" để kết nối màn hình giữ nguyên
         if (myScreenShareId && localScreenStream) {
             console.log("Tạo kết nối màn hình cho người mới:", name);
             const vTrack = localScreenStream.getTracks().find(t => t.kind === 'video');
@@ -294,6 +310,23 @@ socket.on("user-connected", ({ id, name }) => {
             screenPeers[id] = pc;
         }
     }
+});
+
+socket.on('existing-users', (users) => {
+    console.log('Phòng đã có người. Đang kết nối tới:', users);
+    
+    // Mình là người mới, mình sẽ chủ động kết nối
+    users.forEach(user => {
+        const { id, name } = user;
+        if (id.endsWith("_screen")) return; // Bỏ qua màn hình (logic share sẽ xử lý)
+
+        // 1. Tạo thẻ video ngay
+        peers[id] = { pc: null, el: createVideoCard(id, name), name };
+        videoGrid.appendChild(peers[id].el);
+
+        // 2. Chủ động tạo kết nối (true = initiator)
+        createPeer(id, name, true);
+    });
 });
 
 socket.on("user-disconnected", id => {
@@ -341,19 +374,93 @@ socket.on('sharing-started-you', ({ screenShareId }) => {
     }
 });
 
-socket.on("signal", async ({ from, signal }) => {
-    let pc = peers[from]?.pc || createPeer(from, peers[from].name, false);
+socket.on("signal", async ({ from, signal, name }) => {
+    
+    // 1. XỬ LÝ OFFER MÀN HÌNH (LOGIC CỦA NGƯỜI XEM)
+    if (signal.type === "offer" && from.endsWith("_screen")) {
+        console.log("Nhận Screen Share 'offer' từ:", name);
+        
+        // Tạo thẻ video (nếu chưa có)
+        if (!peers[from]) {
+            peers[from] = { pc: null, el: createVideoCard(from, name), name };
+            peers[from].el.classList.add("is-sharing");
+            videoGrid.appendChild(peers[from].el);
+        }
+
+        // Tạo peer (non-initiator)
+        const pc = createPeer(from, name, false); 
+        
+        // Set remote, create answer
+        await pc.setRemoteDescription(new RTCSessionDescription(signal));
+        const ans = await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        
+        // Gửi answer: Server sẽ tự động bắt 'to' (là _screen ID)
+        // và chuyển nó sang kênh 'signal-screen-reply'
+        socket.emit("signal", { 
+            to: from, // Gửi TỚI _screen ID
+            signal: pc.localDescription 
+        });
+        return; // Xong logic cho screen offer
+    }
+
+    // 2. XỬ LÝ TÍN HIỆU CAM-CAM (Logic cũ)
+    let pc = peers[from]?.pc;
+
     if (signal.type === "offer") {
+        // Nhận cam-cam offer
+        if (!peers[from]) {
+            peers[from] = { pc: null, el: createVideoCard(from, name), name };
+            videoGrid.appendChild(peers[from].el);
+        }
+        pc = createPeer(from, peers[from].name, false);
+        
         await pc.setRemoteDescription(new RTCSessionDescription(signal));
         const ans = await pc.createAnswer();
         await pc.setLocalDescription(ans);
         socket.emit("signal", { to: from, signal: pc.localDescription });
+
     } else if (signal.type === "answer") {
+        // Nhận cam-cam answer
+        if (!pc) return console.error("Nhận 'answer' (cam) nhưng không có peer:", from);
         await pc.setRemoteDescription(new RTCSessionDescription(signal));
+
     } else if (signal.candidate) {
-        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        // Nhận cam-cam candidate HOẶC screen-candidate (từ sharer)
+        if (!pc) {
+             // 'pc' có thể chưa tồn tại nếu candidate đến trước offer
+             // Điều này sẽ được xử lý bởi 'addIceCandidate' sau
+             return console.log("Nhận 'candidate' sớm, tạm bỏ qua:", from);
+        }
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } catch (err) {
+            console.warn('Lỗi add candidate (bỏ qua):', err);
+        }
     }
 });
+
+socket.on('signal-screen-reply', async ({ from, signal }) => {
+    // 'from' = ID của người xem (e.g., may_2_id)
+    
+    const pc = screenPeers[from]; // Lấy đúng peer connection
+    if (!pc) {
+        return console.error("Nhận 'signal-screen-reply' nhưng không có peer:", from);
+    }
+
+    try {
+        if (signal.type === "answer") {
+            console.log("Nhận 'answer' CHO MÀN HÌNH từ:", from);
+            await pc.setRemoteDescription(new RTCSessionDescription(signal));
+        } else if (signal.candidate) {
+            // console.log("Nhận 'candidate' CHO MÀN HÌNH từ:", from);
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        }
+    } catch (err) {
+        console.error("Lỗi khi xử lý 'signal-screen-reply':", err);
+    }
+});
+
 socket.on("sharing-state-changed", ({ id, isSharing }) => {
     const peer = peers[id];
     if (!peer || !peer.el) return; // Không tìm thấy peer hoặc thẻ video

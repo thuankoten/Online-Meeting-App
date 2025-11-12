@@ -85,17 +85,32 @@ io.on('connection', socket => {
       if (!room) return callback?.({ success: false, message: 'Phòng không tồn tại' });
       if (room.password !== String(password || '')) return callback?.({ success: false, message: 'Sai mật khẩu' });
 
+      // 1. Lấy danh sách NHỮNG NGƯỜI KHÁC đã có trong phòng
+      const otherMembers = Object.entries(room.members)
+        .map(([id, info]) => ({ 
+            id, 
+            name: info.name, 
+            status: info.status 
+        }));
+
+      // 2. Thêm người mới vào phòng
       room.members[socket.id] = { name, status: 'pending' };
       socket.data.roomId = roomId;
       socket.data.userName = name;
 
       socket.join(roomId);
+
+      // 3. Gửi danh sách người cũ CHỈ CHO người mới
+      socket.emit('existing-users', otherMembers);
+
       // ensure join finished before broadcasting
       setImmediate(() => {
         socket.emit('chatHistory', room.chat);
+        // 4. Báo cho MỌI NGƯỜI (cũ + mới) cập nhật memberList
         io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
           id, name: info.name, status: info.status
         })));
+        // 5. Báo cho NHỮNG NGƯỜI CŨ biết có người mới
         socket.to(roomId).emit('user-connected', { id: socket.id, name });
       });
 
@@ -110,7 +125,34 @@ io.on('connection', socket => {
   // WebRTC signaling
   socket.on('signal', ({ to, signal, name } = {}) => {
     if (!to) return;
-    io.to(to).emit('signal', { from: socket.id, signal, name: socket.data.userName || name });
+    
+    let targetSocketId = to;
+    const room = rooms[socket.data.roomId];
+
+    // Kiểm tra xem 'to' có phải là ID màn hình không
+    if (to.endsWith('_screen') && room && room.members[to]) {
+      // Đây là tín hiệu trả lời (answer/candidate) DÀNH CHO màn hình
+      
+      // 1. Tìm socket ID thật của người đang chia sẻ
+      const realSocketId = room.members[to].realSocketId;
+      
+      if (realSocketId) {
+        // 2. Gửi tín hiệu đến người chia sẻ thật
+        // qua một kênh 'reply' (trả lời) riêng biệt
+        io.to(realSocketId).emit('signal-screen-reply', {
+            from: socket.id, // Tín hiệu này ĐẾN TỪ người xem (socket.id)
+            signal
+        });
+        return; // Dừng lại, không chạy code bên dưới
+      }
+    }
+
+    // Nếu không phải trả lời màn hình, thì đó là tín hiệu cam-cam bình thường
+    io.to(targetSocketId).emit('signal', { 
+        from: socket.id, 
+        signal, 
+        name: socket.data.userName || name 
+    });
   });
 
   // Update peer status
@@ -229,10 +271,9 @@ socket.on('start-sharing', ({ name } = {}) => {
     const screenShareId = socket.id + '_screen';
     const screenShareName = room.members[screenShareId]?.name || 'Màn hình';
 
-    // Gửi tín hiệu "offer" hoặc "candidate" ĐẾN người 'to'
-    // NHƯNG nói là nó đến TỪ 'screenShareId'
+    // Gửi Offer CHO Viewer (VẪN DÙNG KÊNH 'signal' CHUNG)
     io.to(to).emit('signal', {
-      from: screenShareId,
+      from: screenShareId, // TỪ user ảo
       signal,
       name: screenShareName
     });
