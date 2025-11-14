@@ -8,8 +8,8 @@ console.log("Starting HTTPS server...");
 const app = express();
 app.use(express.static('public'));
 
-let keyPath = '192.168.1.11+2-key.pem';
-let certPath = '192.168.1.11+2.pem';
+let keyPath = '192.168.71.1+2-key.pem';
+let certPath = '192.168.71.1+2.pem';
 let server;
 try {
   server = https.createServer({
@@ -211,28 +211,6 @@ socket.on('updateStatus', ({ id, status } = {}) => {
       handRaised: info.handRaised || false
     })));
   });
-  // Disconnect
-  socket.on('disconnect', reason => {
-    const roomId = socket.data.roomId;
-    if (!roomId || !rooms[roomId]) {
-      console.log('🔌 Disconnected:', socket.id, 'reason:', reason);
-      return;
-    }
-
-    delete rooms[roomId].members[socket.id];
-    socket.to(roomId).emit('user-disconnected', socket.id);
-
-    io.to(roomId).emit('memberList', Object.entries(rooms[roomId].members).map(([id, info]) => ({
-      id, name: info.name, status: info.status
-    })));
-
-    if (Object.keys(rooms[roomId].members).length === 0) {
-      delete rooms[roomId];
-      console.log(`🗑️ Room ${roomId} removed (empty)`);
-    }
-
-    console.log(`❌ ${socket.data.userName || socket.id} left (${reason})`);
-  });
 socket.on('start-sharing', ({ name } = {}) => {
     const roomId = socket.data.roomId;
     const room = rooms[roomId];
@@ -301,30 +279,45 @@ socket.on('start-sharing', ({ name } = {}) => {
   });
 
   // Disconnect
-  socket.on('disconnect', reason => {
+socket.on('disconnect', reason => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms[roomId]) {
-      // ... (code 'console.log' giữ nguyên)
+      console.log('🔌 Disconnected (no room):', socket.id, 'reason:', reason);
       return;
     }
+
+    const room = rooms[roomId];
     
-    // === SỬA ĐỔI: Dọn dẹp user ảo NẾU CÓ ===
+    // 1. Dọn dẹp user ảo (màn hình) NẾU CÓ
     const screenShareId = socket.id + '_screen';
-    if (rooms[roomId].members[screenShareId]) {
-      delete rooms[roomId].members[screenShareId];
+    if (room.members[screenShareId]) {
+      delete room.members[screenShareId];
       // Báo những người còn lại là màn hình cũng disconnect
       socket.to(roomId).emit('user-disconnected', screenShareId);
     }
-    // ===================================
+    
+    // 2. Dọn dẹp user thật
+    if (room.members[socket.id]) {
+        delete room.members[socket.id];
+        socket.to(roomId).emit('user-disconnected', socket.id);
+    }
+    
+    console.log(`❌ ${socket.data.userName || socket.id} left (${reason})`);
 
-    delete rooms[roomId].members[socket.id];
-    socket.to(roomId).emit('user-disconnected', socket.id);
+    // 3. Cập nhật danh sách thành viên cho những người còn lại
+    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
+      id, name: info.name, status: info.status
+    })));
 
-    // ... (code 'memberList' và 'if (empty)' giữ nguyên) ...
+    // 4. Dọn dẹp phòng NẾU rỗng
+    if (Object.keys(room.members).length === 0) {
+      delete rooms[roomId];
+      console.log(`🗑️ Room ${roomId} removed (empty)`);
+    }
   });
 });
 
 
 
 const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.11:${PORT}`));
+server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.71.1:${PORT}`));

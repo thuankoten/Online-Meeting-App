@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.1.11:3000", { secure: true });
+const socket = io("https://192.168.71.1:3000", { secure: true });
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");
@@ -36,10 +36,25 @@ let localScreenCard = null;
 let screenPeers = {}; // { targetSocketId : pc }
 let localScreenStream = null;
 let myScreenShareId = null;
+let existingUsersToProcess = [];
 
 // ===================
 // Helper
 // ===================
+function processExistingUsers(users) {
+    console.log('Đang xử lý hàng đợi existing-users:', users);
+    
+    users.forEach(user => {
+        const { id, name } = user;
+        if (id.endsWith("_screen")) return; 
+
+        // Logic cũ từ 'existing-users'
+        peers[id] = { pc: null, el: createVideoCard(id, name), name };
+        videoGrid.appendChild(peers[id].el);
+        createPeer(id, name, true); // (Bây giờ 'localStream' đã tồn tại và an toàn)
+    });
+}
+
 function createVideoCard(id, name, stream = null, muted = false) {
     const wrap = document.createElement("div");
     wrap.className = "cam-card";
@@ -182,19 +197,47 @@ joinBtn.onclick = async () => {
     roomId = roomIdInput.value.trim();
     myName = nameInput.value.trim() || "Khách";
 
-    statusText.textContent = "Đang kết nối...";
-    await startLocalMedia();
-    joined = true;
+    // Thêm kiểm tra
+    if (!roomId) {
+        alert("Vui lòng nhập mã phòng.");
+        statusText.textContent = "Chưa kết nối";
+        return;
+    }
 
-    socket.emit("joinRoom", { roomId, password: roomPasswordInput.value, name: myName }, res => {
+    statusText.textContent = "Đang kết nối...";
+    
+    // Reset hàng đợi (quan trọng nếu join thất bại và thử lại)
+    existingUsersToProcess = []; 
+
+    // Gửi yêu cầu tham gia TỚI MÁY CHỦ
+    socket.emit("joinRoom", { roomId, password: roomPasswordInput.value, name: myName }, async (res) => { // Thêm 'async'
         if (!res.success) {
+            // Thất bại: Chỉ cần thông báo. 
             alert(res.message);
             joined = false;
             statusText.textContent = "Kết nối thất bại";
         } else {
-            statusText.textContent = "Đã vào phòng!";
-            canChat = true;
-            showMeetingView(); // Chuyển sang view phòng họp
+            // THÀNH CÔNG:
+            try {
+                // 1. Bật camera (logic đã sửa)
+                await startLocalMedia(); 
+                joined = true;
+                
+                statusText.textContent = "Đã vào phòng!";
+                canChat = true;
+                showMeetingView(); 
+
+                // 2. (QUAN TRỌNG) Xử lý hàng đợi 'existing-users' (nếu có)
+                processExistingUsers(existingUsersToProcess);
+                existingUsersToProcess = []; // Xóa hàng đợi
+                
+            } catch (err) {
+                // Lỗi camera
+                console.error("Không thể lấy media:", err);
+                statusText.textContent = "Lỗi: Không thể lấy camera/micro";
+                joined = false;
+                socket.disconnect(); // Ngắt kết nối luôn
+            }
         }
     });
 };
@@ -294,11 +337,6 @@ socket.on("memberList", members => {
         if (m.handRaised) displayName += " ✋"; // hiện biểu tượng
         li.textContent = displayName;
         membersList.appendChild(li);
-
-        if (m.id !== socket.id && !peers[m.id]) {
-            peers[m.id] = { name: m.name };
-            createPeer(m.id, m.name, false);
-        }
     });
 });
 
@@ -353,20 +391,14 @@ socket.on("user-connected", ({ id, name }) => {
 });
 
 socket.on('existing-users', (users) => {
-    console.log('Phòng đã có người. Đang kết nối tới:', users);
-    
-    // Mình là người mới, mình sẽ chủ động kết nối
-    users.forEach(user => {
-        const { id, name } = user;
-        if (id.endsWith("_screen")) return; // Bỏ qua màn hình (logic share sẽ xử lý)
-
-        // 1. Tạo thẻ video ngay
-        peers[id] = { pc: null, el: createVideoCard(id, name), name };
-        videoGrid.appendChild(peers[id].el);
-
-        // 2. Chủ động tạo kết nối (true = initiator)
-        createPeer(id, name, true);
-    });
+    if (localStream) {
+        // Nếu localStream đã sẵn sàng (trường hợp hiếm), xử lý ngay
+        processExistingUsers(users);
+    } else {
+        // Nếu chưa, lưu vào hàng đợi để 'joinBtn.onclick' xử lý
+        console.log("Nhận 'existing-users' trước khi media sẵn sàng. Đang đưa vào hàng đợi...");
+        existingUsersToProcess = users;
+    }
 });
 
 socket.on("user-disconnected", id => {
