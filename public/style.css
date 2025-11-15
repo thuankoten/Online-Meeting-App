@@ -621,3 +621,95 @@ body {
 .cam-card.off .avatar-placeholder {
     display: flex;
 }
+
+/* ===== REACTION BUTTON ===== */
+
+/* Bọc nút và popup để định vị */
+#reactionContainer {
+  position: relative;
+}
+
+/* Nút chính (giống các nút controls khác) */
+#reactionBtn {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: none;
+  font-weight: 700;
+  box-shadow: 0 8px 28px rgba(2, 6, 23, 0.35);
+  transition: transform 0.12s ease;
+  font-size: 1.2rem; /* Làm cho icon to hơn một chút */
+}
+#reactionBtn:hover {
+  transform: translateY(-3px);
+}
+
+/* Khay popup chứa biểu cảm (giống thanh controls) */
+#reactionPopup {
+  position: absolute;
+  bottom: calc(100% + 10px); /* Hiện ngay trên nút */
+  left: 50%;
+  transform: translateX(-50%);
+  
+  display: flex; /* Dùng flex để xếp hàng ngang */
+  gap: 8px;
+  padding: 10px;
+  
+  background: linear-gradient(180deg, rgba(12, 12, 18, 0.8), rgba(6, 6, 10, 0.75));
+  backdrop-filter: blur(5px);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(2, 6, 23, 0.5);
+  
+  /* Ẩn đi mặc định */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+/* Lớp .visible để bật popup lên */
+#reactionPopup.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Nút biểu cảm bên trong popup */
+.emoji-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  padding: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.1s ease;
+}
+.emoji-btn:hover {
+  transform: scale(1.2);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ===== HIỆU ỨNG BIỂU CẢM BAY LÊN ===== */
+.reaction-float {
+  position: absolute;
+  bottom: 60px; /* Vị trí bắt đầu, ngay trên tên */
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 2.5rem;
+  opacity: 1;
+  user-select: none;
+  pointer-events: none;
+  
+  /* Gọi animation */
+  animation: floatUp 2.5s ease-out forwards;
+}
+
+/* Định nghĩa animation */
+@keyframes floatUp {
+  0% {
+    transform: translateY(0) translateX(-50%) scale(0.5);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-120px) translateX(-50%) scale(1);
+    opacity: 0;
+  }
+}

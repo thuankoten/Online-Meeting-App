@@ -8,8 +8,8 @@ console.log("Starting HTTPS server...");
 const app = express();
 app.use(express.static('public'));
 
-let keyPath = '192.168.71.1+2-key.pem';
-let certPath = '192.168.71.1+2.pem';
+let keyPath = '192.168.0.103+2-key.pem';
+let certPath = '192.168.0.103+2.pem';
 let server;
 try {
   server = https.createServer({
@@ -211,6 +211,25 @@ socket.on('updateStatus', ({ id, status } = {}) => {
       handRaised: info.handRaised || false
     })));
   });
+
+  // === THÊM MỚI: Xử lý Biểu cảm (Reactions) ===
+  socket.on("sendReaction", ({ emoji }) => {
+    const roomId = socket.data.roomId;
+    // Lấy thông tin user từ danh sách members của phòng
+    const user = rooms[roomId]?.members[socket.id]; 
+    const name = socket.data.userName || "Khách";
+    
+    // Kiểm tra xem user và phòng có tồn tại không
+    if (!roomId || !user) return; 
+
+    // Gửi sự kiện này cho TẤT CẢ mọi người trong phòng
+    io.to(roomId).emit("receiveReaction", {
+      emoji: String(emoji).slice(0, 5), // Giới hạn độ dài emoji
+      fromId: socket.id,
+      name: name
+    });
+  });
+
 socket.on('start-sharing', ({ name } = {}) => {
     const roomId = socket.data.roomId;
     const room = rooms[roomId];
@@ -320,4 +339,4 @@ socket.on('disconnect', reason => {
 
 
 const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.71.1:${PORT}`));
+server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.0.103:${PORT}`));

@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.71.1:3000", { secure: true });
+const socket = io("https://192.168.0.103:3000", { secure: true });
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");
@@ -24,6 +24,9 @@ const shareScreenBtn = document.getElementById("shareScreenBtn");
 const leaveBtn = document.getElementById("leaveBtn");
 const currentRoomId = document.getElementById("currentRoomId");
 const raiseHandBtn = document.getElementById("raiseHandBtn");
+const reactionBtn = document.getElementById("reactionBtn");
+const reactionPopup = document.getElementById("reactionPopup");
+const emojiButtons = document.querySelectorAll(".emoji-btn");
 
 // ===== State =====
 let localStream = null;
@@ -53,6 +56,30 @@ function processExistingUsers(users) {
         videoGrid.appendChild(peers[id].el);
         createPeer(id, name, true); // (Bây giờ 'localStream' đã tồn tại và an toàn)
     });
+}
+
+// Hàm mới để hiển thị biểu cảm bay lên
+function showReactionOnCard(emoji, fromId) {
+  let targetCardId = "cam-" + fromId;
+  
+  if (fromId === socket.id) {
+    targetCardId = "cam-me"; // Trường hợp là chính mình
+  }
+
+  const targetCard = document.getElementById(targetCardId);
+  if (!targetCard) return; // Không tìm thấy card
+
+  const reactionEl = document.createElement("div");
+  reactionEl.className = "reaction-float";
+  reactionEl.textContent = emoji;
+
+  // Thêm vào card video
+  targetCard.appendChild(reactionEl);
+
+  // Tự động xóa sau khi animation kết thúc
+  setTimeout(() => {
+    reactionEl.remove();
+  }, 2500); // 2.5 giây (khớp với thời gian animation)
 }
 
 function createVideoCard(id, name, stream = null, muted = false) {
@@ -706,3 +733,43 @@ function stopScreenShare() {
     Object.values(screenPeers).forEach(pc => pc.close());
     screenPeers = {};
 }
+
+// ===================
+// Reactions Logic
+// ===================
+
+// Bật/tắt khay biểu cảm
+reactionBtn.onclick = () => {
+  reactionPopup.classList.toggle("visible");
+};
+
+// Gửi biểu cảm khi bấm
+emojiButtons.forEach(btn => {
+  btn.onclick = () => {
+    const emoji = btn.getAttribute("data-emoji");
+    
+    // 1. Gửi lên server
+    socket.emit("sendReaction", { emoji });
+    
+    // 2. Hiển thị ngay cho mình
+    showReactionOnCard(emoji, socket.id);
+    
+    // 3. Tắt popup
+    reactionPopup.classList.remove("visible");
+  };
+});
+
+// Nhận biểu cảm từ người khác
+socket.on("receiveReaction", ({ emoji, fromId, name }) => {
+  // Không hiển thị lại của chính mình (vì mình đã hiển thị ở bước 2)
+  if (fromId === socket.id) return;
+  
+  showReactionOnCard(emoji, fromId);
+});
+
+// (Nâng cao) Tắt popup khi bấm ra ngoài
+document.addEventListener("click", (e) => {
+  if (!reactionContainer.contains(e.target) && reactionPopup.classList.contains("visible")) {
+    reactionPopup.classList.remove("visible");
+  }
+});
