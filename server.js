@@ -1,360 +1,254 @@
-const fs = require('fs');
-const https = require('https');
-const express = require('express');
-const { Server } = require('socket.io');
+const fs = require("fs");
+const https = require("https");
+const express = require("express");
+const { Server } = require("socket.io");
 
 console.log("Starting HTTPS server...");
 
 const app = express();
-app.use(express.static('public'));
+app.use(express.static("public"));
 
-let keyPath = '192.168.1.7+2-key.pem';
-let certPath = '192.168.1.7+2.pem';
-let server;
-try {
-  server = https.createServer({
-    key: fs.readFileSync(keyPath),
-    cert: fs.readFileSync(certPath)
-  }, app);
-} catch (err) {
-  console.error('Failed to read TLS files:', err.message);
-  process.exit(1);
-}
+// ---- TLS ----
+const key = fs.readFileSync("192.168.1.7+2-key.pem");
+const cert = fs.readFileSync("192.168.1.7+2.pem");
+const server = https.createServer({ key, cert }, app);
 
+// ---- Socket.IO ----
 const io = new Server(server, { cors: { origin: "*" } });
 
-// In-memory rooms: { roomId: { password, members: { socketId: { name, status } }, chat: [msg] } }
+// ---- In-memory rooms ----
+/*
+rooms = {
+  [roomId]: {
+    password,
+    members: {
+      [socketId]: { name, status, audioOn, handRaised, realSocketId }
+    },
+    chat: []
+  }
+}
+*/
 const rooms = {};
 
-function generateRoomId() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+// ---- Utils ----
+const safe = s => String(s || "").replace(/[&<>"']/g, c => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+
+const genRoom = () => {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let id;
-  do {
-    id = '';
-    for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
-  } while (rooms[id]);
+  do id = Array.from({ length: 6 }, () => chars[Math.random() * chars.length | 0]).join("");
+  while (rooms[id]);
   return id;
-}
+};
 
-function escapeHtml(s) {
-  return String(s || '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[c]);
-}
+// =============================================================
+//                        SOCKET MAIN
+// =============================================================
+io.on("connection", socket => {
+  console.log("🔌", socket.id);
 
-io.on('connection', socket => {
-  console.log('🔌 New socket:', socket.id);
+  const updateList = roomId => {
+    const room = rooms[roomId];
+    if (!room) return;
+    io.to(roomId).emit("memberList",
+      Object.entries(room.members).map(([id, u]) => ({
+        id, name: u.name, status: u.status, audioOn: u.audioOn, handRaised: u.handRaised
+      }))
+    );
+  };
 
-  // Create room
-  socket.on('createRoom', ({ roomId, password, autoJoin, name } = {}, callback) => {
+  // ================== CREATE ROOM ==================
+  socket.on("createRoom", ({ roomId, password, autoJoin, name } = {}, cb) => {
     try {
-      if (!roomId) roomId = generateRoomId();
-      if (rooms[roomId]) {
-        return callback?.({ success: false, message: 'Mã phòng trùng, vui lòng thử lại' }) || null;
-      }
-      rooms[roomId] = { password: String(password || ''), members: {}, chat: [] };
-      console.log(`✅ Room created: ${roomId}`);
+      roomId ||= genRoom();
+      if (rooms[roomId]) return cb?.({ success: false, message: "Mã phòng trùng" });
 
-      callback?.({ success: true, roomId });
+      rooms[roomId] = { password: String(password || ""), members: {}, chat: [] };
+      console.log("✅ Created:", roomId);
 
-      // Optional: immediately join the creator if requested (safer to let client call join)
+      cb?.({ success: true, roomId });
+
       if (autoJoin && name) {
-        // mark member, set socket data, join and broadcast after join completes
-        rooms[roomId].members[socket.id] = { name, status: 'pending' };
-        socket.data.roomId = roomId;
-        socket.data.userName = name;
+        rooms[roomId].members[socket.id] = { name, status: "pending" };
+        socket.data = { roomId, userName: name };
         socket.join(roomId);
         setImmediate(() => {
-          socket.emit('chatHistory', rooms[roomId].chat);
-          io.to(roomId).emit('memberList', Object.entries(rooms[roomId].members).map(([id, info]) => ({
-            id, name: info.name, status: info.status
-          })));
+          socket.emit("chatHistory", rooms[roomId].chat);
+          updateList(roomId);
         });
       }
-    } catch (err) {
-      console.error('createRoom error:', err);
-      callback?.({ success: false, message: 'Lỗi server' });
+    } catch {
+      cb?.({ success: false, message: "Server error" });
     }
   });
 
-  // Join room
-  socket.on('joinRoom', ({ roomId, password, name } = {}, callback) => {
-    try {
-      if (!roomId) return callback?.({ success: false, message: 'Thiếu mã phòng' });
-      const room = rooms[roomId];
-      if (!room) return callback?.({ success: false, message: 'Phòng không tồn tại' });
-      if (room.password !== String(password || '')) return callback?.({ success: false, message: 'Sai mật khẩu' });
-
-      // 1. Lấy danh sách NHỮNG NGƯỜI KHÁC đã có trong phòng
-      const otherMembers = Object.entries(room.members)
-        .map(([id, info]) => ({ 
-            id, 
-            name: info.name, 
-            status: info.status 
-        }));
-
-      // 2. Thêm người mới vào phòng
-      room.members[socket.id] = { name, status: 'pending' };
-      socket.data.roomId = roomId;
-      socket.data.userName = name;
-
-      socket.join(roomId);
-
-      // 3. Gửi danh sách người cũ CHỈ CHO người mới
-      socket.emit('existing-users', otherMembers);
-
-      // ensure join finished before broadcasting
-      setImmediate(() => {
-        socket.emit('chatHistory', room.chat);
-        // 4. Báo cho MỌI NGƯỜI (cũ + mới) cập nhật memberList
-        io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
-          id, name: info.name, status: info.status
-        })));
-        // 5. Báo cho NHỮNG NGƯỜI CŨ biết có người mới
-        socket.to(roomId).emit('user-connected', { id: socket.id, name });
-      });
-
-      console.log(`✅ ${name} joined room: ${roomId}`);
-      callback?.({ success: true });
-    } catch (err) {
-      console.error('joinRoom error:', err);
-      callback?.({ success: false, message: 'Lỗi server' });
-    }
-  });
-
-  // WebRTC signaling
-  socket.on('signal', ({ to, signal, name } = {}) => {
-    if (!to) return;
-    
-    let targetSocketId = to;
-    const room = rooms[socket.data.roomId];
-
-    // Kiểm tra xem 'to' có phải là ID màn hình không
-    if (to.endsWith('_screen') && room && room.members[to]) {
-      // Đây là tín hiệu trả lời (answer/candidate) DÀNH CHO màn hình
-      
-      // 1. Tìm socket ID thật của người đang chia sẻ
-      const realSocketId = room.members[to].realSocketId;
-      
-      if (realSocketId) {
-        // 2. Gửi tín hiệu đến người chia sẻ thật
-        // qua một kênh 'reply' (trả lời) riêng biệt
-        io.to(realSocketId).emit('signal-screen-reply', {
-            from: socket.id, // Tín hiệu này ĐẾN TỪ người xem (socket.id)
-            signal
-        });
-        return; // Dừng lại, không chạy code bên dưới
-      }
-    }
-
-    // Nếu không phải trả lời màn hình, thì đó là tín hiệu cam-cam bình thường
-    io.to(targetSocketId).emit('signal', { 
-        from: socket.id, 
-        signal, 
-        name: socket.data.userName || name 
-    });
-  });
-
-  // Update peer status
-  // Update peer status (camera/audio)
-socket.on('updateStatus', ({ id, status, audioOn } = {}) => {
-    const room = rooms[socket.data.roomId];
-    if (!room || !room.members[id]) return;
-
-    // Cập nhật trạng thái trong memory
-    if (typeof status !== 'undefined') room.members[id].status = status;
-    if (typeof audioOn !== 'undefined') room.members[id].audioOn = !!audioOn;
-
-    // Broadcast trạng thái tổng hợp (camera + audio) tới cả phòng
-    io.to(socket.data.roomId).emit('peer-status-update', {
-        id,
-        status: room.members[id].status,
-        audioOn: room.members[id].audioOn
-    });
-
-    // Giữ thêm event riêng cho compatibility với client nghe 'peer-audio-update'
-    io.to(socket.data.roomId).emit('peer-audio-update', {
-        id,
-        audioOn: room.members[id].audioOn
-    });
-
-    // Cập nhật memberList (bao gồm audioOn nếu client cần)
-    io.to(socket.data.roomId).emit(
-        'memberList',
-        Object.entries(room.members).map(([mid, info]) => ({
-            id: mid,
-            name: info.name,
-            status: info.status,
-            audioOn: info.audioOn
-        }))
-    );
-});
-
-
-  // Chat
-  socket.on('chatMessage', msg => {
-    const roomId = socket.data.roomId;
-    if (!roomId || !rooms[roomId]) return;
+  // ================== JOIN ROOM ==================
+  socket.on("joinRoom", ({ roomId, password, name } = {}, cb) => {
     const room = rooms[roomId];
+    if (!room) return cb?.({ success: false, message: "Phòng không tồn tại" });
+    if (room.password !== String(password || "")) return cb?.({ success: false, message: "Sai mật khẩu" });
 
-    let text = String(msg || '').trim();
+    const existing = Object.entries(room.members).map(([id, u]) => ({
+      id, name: u.name, status: u.status
+    }));
+
+    room.members[socket.id] = { name, status: "pending" };
+    socket.data = { roomId, userName: name };
+    socket.join(roomId);
+
+    socket.emit("existing-users", existing);
+
+    setImmediate(() => {
+      socket.emit("chatHistory", room.chat);
+      updateList(roomId);
+      socket.to(roomId).emit("user-connected", { id: socket.id, name });
+    });
+
+    console.log(`➡️ ${name} joined ${roomId}`);
+    cb?.({ success: true });
+  });
+
+  // ================== SIGNALING ==================
+  socket.on("signal", ({ to, signal, name }) => {
+    if (!to) return;
+
+    const room = rooms[socket.data.roomId];
+    if (to.endsWith("_screen") && room?.members[to]) {
+      const real = room.members[to].realSocketId;
+      if (real) {
+        io.to(real).emit("signal-screen-reply", { from: socket.id, signal });
+        return;
+      }
+    }
+
+    io.to(to).emit("signal", {
+      from: socket.id,
+      signal,
+      name: socket.data.userName || name
+    });
+  });
+
+  socket.on("signal-screen", ({ to, signal }) => {
+    const roomId = socket.data.roomId;
+    const screenId = socket.id + "_screen";
+    const name = rooms[roomId]?.members[screenId]?.name || "Screen";
+
+    io.to(to).emit("signal", { from: screenId, signal, name });
+  });
+
+  // ================== STATUS UPDATE ==================
+  socket.on("updateStatus", ({ id, status, audioOn }) => {
+    const room = rooms[socket.data.roomId];
+    if (!room?.members[id]) return;
+
+    if (status !== undefined) room.members[id].status = status;
+    if (audioOn !== undefined) room.members[id].audioOn = !!audioOn;
+
+    io.to(socket.data.roomId).emit("peer-status-update", {
+      id, status: room.members[id].status, audioOn: room.members[id].audioOn
+    });
+
+    io.to(socket.data.roomId).emit("peer-audio-update", {
+      id, audioOn: room.members[id].audioOn
+    });
+
+    updateList(socket.data.roomId);
+  });
+
+  // ================== CHAT ==================
+  socket.on("chatMessage", text => {
+    const roomId = socket.data.roomId;
+    const room = rooms[roomId];
+    if (!room) return;
+
+    text = safe(String(text).trim()).slice(0, 1000);
     if (!text) return;
-    if (text.length > 1000) text = text.slice(0, 1000);
 
-    const name = socket.data.userName || 'Người lạ';
-    const message = {
+    const msg = {
       id: socket.id,
-      name: escapeHtml(name),
-      text: escapeHtml(text),
+      name: safe(socket.data.userName || "User"),
+      text,
       time: Date.now()
     };
 
-    room.chat.push(message);
-    // bound history
+    room.chat.push(msg);
     if (room.chat.length > 500) room.chat.shift();
 
-    io.to(roomId).emit('chatMessage', message);
+    io.to(roomId).emit("chatMessage", msg);
   });
 
-    // Raise Hand ✋
-  socket.on('raiseHand', ({ raised } = {}) => {
-    const roomId = socket.data.roomId;
-    if (!roomId || !rooms[roomId]) return;
-    const room = rooms[roomId];
-    room.members[socket.id].handRaised = raised;
-
-    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
-      id,
-      name: info.name,
-      handRaised: info.handRaised || false
-    })));
-  });
-
-  // === THÊM MỚI: Xử lý Biểu cảm (Reactions) ===
-  socket.on("sendReaction", ({ emoji }) => {
-    const roomId = socket.data.roomId;
-    // Lấy thông tin user từ danh sách members của phòng
-    const user = rooms[roomId]?.members[socket.id]; 
-    const name = socket.data.userName || "Khách";
-    
-    // Kiểm tra xem user và phòng có tồn tại không
-    if (!roomId || !user) return; 
-
-    // Gửi sự kiện này cho TẤT CẢ mọi người trong phòng
-    io.to(roomId).emit("receiveReaction", {
-      emoji: String(emoji).slice(0, 5), // Giới hạn độ dài emoji
-      fromId: socket.id,
-      name: name
-    });
-  });
-
-socket.on('start-sharing', ({ name } = {}) => {
-    const roomId = socket.data.roomId;
-    const room = rooms[roomId];
-    if (!room) return;
-
-    const screenShareId = socket.id + '_screen';
-    const screenShareName = name || 'Màn hình';
-
-    // Thêm user ảo vào phòng
-    room.members[screenShareId] = {
-      name: screenShareName,
-      status: 'sharing',
-      realSocketId: socket.id // Liên kết với socket thật
-    };
-
-    // 1. Báo cho CHÍNH BẠN biết ID màn hình của bạn
-    socket.emit('sharing-started-you', { screenShareId });
-
-    // 2. Báo cho NHỮNG NGƯỜI KHÁC có "user" mới
-    socket.to(roomId).emit('user-connected', {
-      id: screenShareId,
-      name: screenShareName
-    });
-    
-    // 3. Cập nhật danh sách thành viên cho TẤT CẢ
-    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
-      id, name: info.name, status: info.status
-    })));
-  });
-
-  // === THÊM MỚI: Dừng chia sẻ màn hình ===
-  socket.on('stop-sharing', () => {
-    const roomId = socket.data.roomId;
-    const room = rooms[roomId];
-    if (!room) return;
-
-    const screenShareId = socket.id + '_screen';
-    if (!room.members[screenShareId]) return; // Không có gì để dừng
-
-    // Xóa user ảo
-    delete room.members[screenShareId];
-
-    // Báo mọi người user ảo đã thoát
-    io.to(roomId).emit('user-disconnected', screenShareId);
-
-    // Cập nhật danh sách thành viên
-    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
-      id, name: info.name, status: info.status
-    })));
-  });
-
-  // === THÊM MỚI: Kênh tín hiệu riêng cho màn hình ===
-  socket.on('signal-screen', ({ to, signal }) => {
+  // ================== RAISE HAND ==================
+  socket.on("raiseHand", ({ raised }) => {
     const room = rooms[socket.data.roomId];
     if (!room) return;
-    
-    const screenShareId = socket.id + '_screen';
-    const screenShareName = room.members[screenShareId]?.name || 'Màn hình';
 
-    // Gửi Offer CHO Viewer (VẪN DÙNG KÊNH 'signal' CHUNG)
-    io.to(to).emit('signal', {
-      from: screenShareId, // TỪ user ảo
-      signal,
-      name: screenShareName
+    room.members[socket.id].handRaised = raised;
+    updateList(socket.data.roomId);
+  });
+
+  // ================== REACTIONS ==================
+  socket.on("sendReaction", ({ emoji }) => {
+    const roomId = socket.data.roomId;
+    io.to(roomId).emit("receiveReaction", {
+      emoji: String(emoji).slice(0, 5),
+      fromId: socket.id,
+      name: socket.data.userName
     });
   });
 
-  // Disconnect
-socket.on('disconnect', reason => {
+  // ================== SCREEN SHARE ==================
+  socket.on("start-sharing", ({ name }) => {
     const roomId = socket.data.roomId;
-    if (!roomId || !rooms[roomId]) {
-      console.log('🔌 Disconnected (no room):', socket.id, 'reason:', reason);
-      return;
-    }
-
     const room = rooms[roomId];
-    
-    // 1. Dọn dẹp user ảo (màn hình) NẾU CÓ
-    const screenShareId = socket.id + '_screen';
-    if (room.members[screenShareId]) {
-      delete room.members[screenShareId];
-      // Báo những người còn lại là màn hình cũng disconnect
-      socket.to(roomId).emit('user-disconnected', screenShareId);
-    }
-    
-    // 2. Dọn dẹp user thật
-    if (room.members[socket.id]) {
-        delete room.members[socket.id];
-        socket.to(roomId).emit('user-disconnected', socket.id);
-    }
-    
-    console.log(`❌ ${socket.data.userName || socket.id} left (${reason})`);
+    if (!room) return;
 
-    // 3. Cập nhật danh sách thành viên cho những người còn lại
-    io.to(roomId).emit('memberList', Object.entries(room.members).map(([id, info]) => ({
-      id, name: info.name, status: info.status
-    })));
+    const screenId = socket.id + "_screen";
 
-    // 4. Dọn dẹp phòng NẾU rỗng
-    if (Object.keys(room.members).length === 0) {
+    room.members[screenId] = {
+      name: name || "Screen",
+      status: "sharing",
+      realSocketId: socket.id
+    };
+
+    socket.emit("sharing-started-you", { screenShareId: screenId });
+    socket.to(roomId).emit("user-connected", { id: screenId, name });
+    updateList(roomId);
+  });
+
+  socket.on("stop-sharing", () => {
+    const room = rooms[socket.data.roomId];
+    if (!room) return;
+
+    const id = socket.id + "_screen";
+    delete room.members[id];
+
+    socket.to(socket.data.roomId).emit("user-disconnected", id);
+    updateList(socket.data.roomId);
+  });
+
+  // ================== DISCONNECT ==================
+  socket.on("disconnect", r => {
+    const { roomId } = socket.data;
+    const room = rooms[roomId];
+    if (!room) return;
+
+    const screenId = socket.id + "_screen";
+    delete room.members[screenId];
+    socket.to(roomId).emit("user-disconnected", screenId);
+
+    delete room.members[socket.id];
+    socket.to(roomId).emit("user-disconnected", socket.id);
+
+    updateList(roomId);
+
+    if (!Object.keys(room.members).length) {
       delete rooms[roomId];
-      console.log(`🗑️ Room ${roomId} removed (empty)`);
+      console.log("🗑️ Room removed:", roomId);
     }
   });
 });
 
-
-
-const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.7:${PORT}`));
+// ---- Start server ----
+server.listen(3000, () => console.log("HTTPS: https://192.168.1.7:3000"));
