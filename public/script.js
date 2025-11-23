@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.1.117:3000", { 
+const socket = io("https://192.168.1.7:3000", { 
     secure: true,
     reconnection: true,
     reconnectionDelay: 1000,
@@ -216,20 +216,64 @@ function createVideoCard(id, name, stream = null, muted = false) {
     label.className = "cam-overlay";
     label.textContent = name || "Người dùng";
 
+    // === MIC BADGE (icon mic) ===
+    const micBadge = document.createElement("span");
+    micBadge.className = "mic-badge";
+    // mặc định: nếu có stream và có audio track lấy trạng thái, ngược lại ẩn
+    if (stream && stream.getAudioTracks().length > 0) {
+        micBadge.textContent = stream.getAudioTracks()[0].enabled ? "🎙️" : "🔇";
+        if (!stream.getAudioTracks()[0].enabled) micBadge.classList.add("muted");
+    } else {
+        micBadge.style.display = "none";
+    }
+
+    // Bọc overlay để có thể chứa cả tên và mic badge (flex)
+    label.innerHTML = ""; // xóa textContent trước đó
+    const leftWrap = document.createElement("div");
+    leftWrap.style.display = "flex";
+    leftWrap.style.alignItems = "center";
+    leftWrap.style.gap = "8px";
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = name || "Người dùng";
+    leftWrap.appendChild(nameSpan);
+    leftWrap.appendChild(micBadge);
+
+    const rightWrap = document.createElement("div"); // dành cho badges khác sau này
+    rightWrap.className = "overlay-right";
+
+    label.appendChild(leftWrap);
+    label.appendChild(rightWrap);
+
     wrap.appendChild(video);
     wrap.appendChild(avatar);
     wrap.appendChild(label);
 
+    // helper: cập nhật stream
     wrap.updateStream = function (newStream) {
         if (newStream) {
             video.srcObject = newStream;
             video.style.display = "block";
             avatar.style.display = "none";
+
+            // cập nhật mic badge hiển thị nếu có audio
+            if (newStream.getAudioTracks().length > 0) {
+                micBadge.style.display = "";
+                micBadge.textContent = newStream.getAudioTracks()[0].enabled ? "🎙️" : "🔇";
+                micBadge.classList.toggle("muted", !newStream.getAudioTracks()[0].enabled);
+            }
         } else {
             video.srcObject = null;
             video.style.display = "none";
             avatar.style.display = "flex";
+            micBadge.style.display = "none";
         }
+    };
+
+    // helper: cập nhật trạng thái audio (true = bật)
+    wrap.updateAudio = function(enabled) {
+        micBadge.style.display = "";
+        micBadge.textContent = enabled ? "🎙️" : "🔇";
+        micBadge.classList.toggle("muted", !enabled);
     };
 
     return wrap;
@@ -244,6 +288,13 @@ async function startLocalMedia() {
     videoGrid.appendChild(myCard);
     // Sử dụng setTimeout để đảm bảo DOM đã được cập nhật
     setTimeout(() => updateVideoGridLayout(), 100);
+    // --- THÊM: gửi trạng thái ban đầu (video/audio) lên server để update peer UI
+    socket.emit("updateStatus", {
+        id: socket.id,
+        status: (localStream && localStream.getVideoTracks().length && localStream.getVideoTracks()[0].enabled) ? "on" : "off",
+        audioOn: (localStream && localStream.getAudioTracks().length && localStream.getAudioTracks()[0].enabled) ? true : false
+    });
+    joined = true;
 }
 
 function createPeer(id, name, initiator) {
@@ -436,6 +487,12 @@ joinBtn.onclick = async () => {
                 statusText.textContent = "Đang khởi động camera...";
                 // 1. Bật camera (logic đã sửa)
                 await startLocalMedia(); 
+                // --- THÊM: gửi trạng thái ban đầu (video/audio) lên server để update peer UI
+                socket.emit("updateStatus", {
+                    id: socket.id,
+                    status: (localStream && localStream.getVideoTracks().length && localStream.getVideoTracks()[0].enabled) ? "on" : "off",
+                    audioOn: (localStream && localStream.getAudioTracks().length && localStream.getAudioTracks()[0].enabled) ? true : false
+                });
                 joined = true;
                 
                 statusText.textContent = "Đã vào phòng!";
@@ -573,20 +630,54 @@ socket.on("memberList", members => {
 // ===================
 // Khi người khác bật/tắt camera
 // ===================
-socket.on("peer-status-update", ({ id, status }) => {
+socket.on("peer-status-update", ({ id, status, audioOn }) => {
     const card = document.getElementById("cam-" + id);
     if (!card) return;
 
     const video = card.querySelector("video");
     const avatar = card.querySelector(".avatar-placeholder");
 
-    if (status === "off") {
-        if (video) video.style.display = "none";
-        if (avatar) avatar.style.display = "flex";
-    } else {
-        if (video) video.style.display = "block";
-        if (avatar) avatar.style.display = "none";
+    // Camera on/off (nếu server gửi)
+    if (typeof status !== "undefined") {
+        if (status === "off") {
+            if (video) video.style.display = "none";
+            if (avatar) avatar.style.display = "flex";
+        } else {
+            if (video) video.style.display = "block";
+            if (avatar) avatar.style.display = "none";
+        }
     }
+
+    // Audio on/off (nếu server gửi)
+    if (typeof audioOn !== "undefined") {
+        let micBadge = card.querySelector(".mic-badge");
+        if (!micBadge) {
+            // tạo micBadge nếu chưa có và chèn vào overlay bên trái
+            micBadge = document.createElement("span");
+            micBadge.className = "mic-badge";
+            const leftWrap = card.querySelector(".cam-overlay > div") || card.querySelector(".cam-overlay");
+            if (leftWrap) leftWrap.insertBefore(micBadge, leftWrap.children[1] || null);
+        }
+        micBadge.style.display = "";
+        micBadge.textContent = audioOn ? "🎙️" : "🔇";
+        micBadge.classList.toggle("muted", !audioOn);
+    }
+});
+
+// thêm listener song song để tương thích nếu server phát sự kiện riêng
+socket.on("peer-audio-update", ({ id, audioOn }) => {
+    const card = document.getElementById("cam-" + id);
+    if (!card) return;
+    let micBadge = card.querySelector(".mic-badge");
+    if (!micBadge) {
+        micBadge = document.createElement("span");
+        micBadge.className = "mic-badge";
+        const leftWrap = card.querySelector(".cam-overlay > div") || card.querySelector(".cam-overlay");
+        if (leftWrap) leftWrap.insertBefore(micBadge, leftWrap.children[1] || null);
+    }
+    micBadge.style.display = "";
+    micBadge.textContent = audioOn ? "🎙️" : "🔇";
+    micBadge.classList.toggle("muted", !audioOn);
 });
 
 socket.on("user-connected", ({ id, name }) => {
@@ -842,9 +933,27 @@ toggleVideoBtn.onclick = () => {
     }
 };
 toggleAudioBtn.onclick = () => {
+    if (!localStream || localStream.getAudioTracks().length === 0) {
+        showError("Không có micro để bật/tắt");
+        return;
+    }
     const track = localStream.getAudioTracks()[0];
     track.enabled = !track.enabled;
     toggleAudioBtn.textContent = track.enabled ? "Tắt Micro" : "Mở Micro";
+
+    // Cập nhật UI card "me" nếu tồn tại
+    const myCard = document.getElementById("cam-me");
+    if (myCard && typeof myCard.updateAudio === "function") {
+        myCard.updateAudio(track.enabled);
+        // thêm class 'off' cho toàn bộ card nếu tắt audio + tắt video (nếu cần)
+        myCard.classList.toggle("off-audio", !track.enabled);
+    }
+
+    // Nếu muốn gửi trạng thái lên server, có thể gửi thêm trường audio
+    socket.emit("updateStatus", {
+        id: socket.id,
+        audioOn: track.enabled
+    });
 };
 
 
@@ -857,19 +966,37 @@ raiseHandBtn.onclick = () => {
     socket.emit("raiseHand", { raised: handRaised });
 };
 
-socket.on("peer-status-update", ({ id, status }) => {
+socket.on("peer-status-update", ({ id, status, audioOn }) => {
     const card = document.getElementById("cam-" + id);
     if (!card) return;
 
     const video = card.querySelector("video");
     const avatar = card.querySelector(".avatar-placeholder");
 
-    if (status === "off") {
-        if (video) video.style.display = "none";
-        if (avatar) avatar.style.display = "flex";
-    } else {
-        if (video) video.style.display = "block";
-        if (avatar) avatar.style.display = "none";
+    // Camera on/off (nếu server gửi)
+    if (typeof status !== "undefined") {
+        if (status === "off") {
+            if (video) video.style.display = "none";
+            if (avatar) avatar.style.display = "flex";
+        } else {
+            if (video) video.style.display = "block";
+            if (avatar) avatar.style.display = "none";
+        }
+    }
+
+    // Audio on/off (nếu server gửi)
+    if (typeof audioOn !== "undefined") {
+        let micBadge = card.querySelector(".mic-badge");
+        if (!micBadge) {
+            // tạo micBadge nếu chưa có và chèn vào overlay bên trái
+            micBadge = document.createElement("span");
+            micBadge.className = "mic-badge";
+            const leftWrap = card.querySelector(".cam-overlay > div") || card.querySelector(".cam-overlay");
+            if (leftWrap) leftWrap.insertBefore(micBadge, leftWrap.children[1] || null);
+        }
+        micBadge.style.display = "";
+        micBadge.textContent = audioOn ? "🎙️" : "🔇";
+        micBadge.classList.toggle("muted", !audioOn);
     }
 });
 
@@ -1091,7 +1218,6 @@ socket.on('reconnect_error', (error) => {
 socket.on('reconnect_failed', () => {
     console.error('❌ Không thể kết nối lại sau nhiều lần thử');
     showError("Không thể kết nối với server. Vui lòng tải lại trang.");
-    statusText.textContent = "Kết nối thất bại";
 });
 
 socket.on('error', (error) => {

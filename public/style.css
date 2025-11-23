@@ -338,6 +338,34 @@ body {
     font-size: 0.9rem;
 }
 
+/* mic badge trong overlay */
+.cam-overlay { display: flex; align-items: center; justify-content: space-between; gap:8px; }
+/* mic icon nhỏ bên trái (trong leftWrap) */
+.cam-overlay .mic-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    color: #eaf8ff;
+    font-size: 0.95rem;
+    font-weight: 700;
+    box-shadow: 0 6px 18px rgba(2,6,23,0.25);
+}
+/* trạng thái muted (đỏ/pale) */
+.cam-overlay .mic-badge.muted {
+    background: rgba(255,80,80,0.12);
+    color: #ffd7d7;
+    box-shadow: none;
+}
+
+/* small class to style card when audio off (optional) */
+.cam-card.off-audio {
+    /* chỉ làm nhẹ khác biệt, không thay đổi avatar behavior */
+    outline: 2px dashed rgba(255,80,80,0.06);
+}
+
 /* small status badges */
 .cam-overlay .badge {
     display:inline-flex;

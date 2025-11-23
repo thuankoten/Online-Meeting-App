@@ -1,4 +1,4 @@
- const fs = require('fs');
+const fs = require('fs');
 const https = require('https');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -8,8 +8,8 @@ console.log("Starting HTTPS server...");
 const app = express();
 app.use(express.static('public'));
 
-let keyPath = '192.168.1.117+2-key.pem';
-let certPath = '192.168.1.117+2.pem';
+let keyPath = '192.168.1.7+2-key.pem';
+let certPath = '192.168.1.7+2.pem';
 let server;
 try {
   server = https.createServer({
@@ -156,18 +156,36 @@ io.on('connection', socket => {
   });
 
   // Update peer status
-  // Update peer status (camera on/off)
-socket.on('updateStatus', ({ id, status } = {}) => {
+  // Update peer status (camera/audio)
+socket.on('updateStatus', ({ id, status, audioOn } = {}) => {
     const room = rooms[socket.data.roomId];
     if (!room || !room.members[id]) return;
-    room.members[id].status = status;
-    io.to(socket.data.roomId).emit('peer-status-update', { id, status });
+
+    // Cập nhật trạng thái trong memory
+    if (typeof status !== 'undefined') room.members[id].status = status;
+    if (typeof audioOn !== 'undefined') room.members[id].audioOn = !!audioOn;
+
+    // Broadcast trạng thái tổng hợp (camera + audio) tới cả phòng
+    io.to(socket.data.roomId).emit('peer-status-update', {
+        id,
+        status: room.members[id].status,
+        audioOn: room.members[id].audioOn
+    });
+
+    // Giữ thêm event riêng cho compatibility với client nghe 'peer-audio-update'
+    io.to(socket.data.roomId).emit('peer-audio-update', {
+        id,
+        audioOn: room.members[id].audioOn
+    });
+
+    // Cập nhật memberList (bao gồm audioOn nếu client cần)
     io.to(socket.data.roomId).emit(
         'memberList',
         Object.entries(room.members).map(([mid, info]) => ({
             id: mid,
             name: info.name,
-            status: info.status
+            status: info.status,
+            audioOn: info.audioOn
         }))
     );
 });
@@ -339,4 +357,4 @@ socket.on('disconnect', reason => {
 
 
 const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.117:${PORT}`));
+server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.7:${PORT}`));
