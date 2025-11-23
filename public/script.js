@@ -3,7 +3,13 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.0.103:3000", { secure: true });
+const socket = io("https://192.168.1.117:3000", { 
+    secure: true,
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    reconnectionAttempts: 5
+});
 
 // ===== UI Elements =====
 const roomIdInput = document.getElementById("roomIdInput");
@@ -25,6 +31,7 @@ const leaveBtn = document.getElementById("leaveBtn");
 const currentRoomId = document.getElementById("currentRoomId");
 const raiseHandBtn = document.getElementById("raiseHandBtn");
 const reactionBtn = document.getElementById("reactionBtn");
+const reactionContainer = document.getElementById("reactionContainer");
 const reactionPopup = document.getElementById("reactionPopup");
 const emojiButtons = document.querySelectorAll(".emoji-btn");
 
@@ -56,6 +63,110 @@ function processExistingUsers(users) {
         videoGrid.appendChild(peers[id].el);
         createPeer(id, name, true); // (Bây giờ 'localStream' đã tồn tại và an toàn)
     });
+    
+    // Cập nhật layout sau khi thêm users - dùng setTimeout để đảm bảo DOM đã được cập nhật
+    setTimeout(() => updateVideoGridLayout(), 100);
+}
+
+// ===== FUNCTION: Cập nhật layout video grid dựa trên số lượng người =====
+function updateVideoGridLayout() {
+    // Đếm số lượng cam-card thật (không tính screen sharing)
+    // Đếm tất cả cam-card trong videoGrid, loại trừ những card có class "is-sharing"
+    const allCards = videoGrid.querySelectorAll('.cam-card');
+    const peopleCards = Array.from(allCards).filter(card => 
+        !card.classList.contains('is-sharing')
+    );
+    
+    const totalPeople = peopleCards.length;
+    
+    // Xóa tất cả classes layout cũ
+    videoGrid.classList.remove('layout-1', 'layout-2', 'layout-3plus');
+    
+    // Áp dụng layout dựa trên số lượng người
+    if (totalPeople === 1) {
+        videoGrid.classList.add('layout-1'); // 1 người: 100%
+    } else if (totalPeople === 2) {
+        videoGrid.classList.add('layout-2'); // 2 người: 50% mỗi người
+    } else if (totalPeople > 2) {
+        videoGrid.classList.add('layout-3plus'); // 3+ người: chia đều
+    }
+    
+    console.log(`Layout updated: ${totalPeople} người`, {
+        allCards: allCards.length,
+        peopleCards: peopleCards.length,
+        layout: videoGrid.className
+    });
+    
+    // Force reflow để đảm bảo CSS được áp dụng
+    videoGrid.offsetHeight;
+}
+
+// ===== ERROR & NOTIFICATION HELPERS =====
+function showError(message) {
+    // Tạo toast notification
+    const toast = document.createElement('div');
+    toast.className = 'error-toast';
+    toast.textContent = message;
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(90deg, #ff6b6b, #f03e3e);
+        color: white;
+        padding: 14px 24px;
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(240, 62, 62, 0.4);
+        z-index: 10000;
+        font-weight: 600;
+        animation: slideDown 0.3s ease;
+    `;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.animation = 'slideUp 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
+}
+
+function showSuccess(message) {
+    const toast = document.createElement('div');
+    toast.className = 'success-toast';
+    toast.textContent = message;
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(90deg, #51cf66, #40c057);
+        color: white;
+        padding: 14px 24px;
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(64, 192, 87, 0.4);
+        z-index: 10000;
+        font-weight: 600;
+        animation: slideDown 0.3s ease;
+    `;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.animation = 'slideUp 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+function setLoading(isLoading) {
+    if (isLoading) {
+        joinBtn.disabled = true;
+        createBtn.disabled = true;
+        joinBtn.textContent = 'Đang kết nối...';
+        createBtn.textContent = 'Đang tạo...';
+    } else {
+        joinBtn.disabled = false;
+        createBtn.disabled = false;
+        joinBtn.textContent = 'Tham gia';
+        createBtn.textContent = 'Tạo phòng ngẫu nhiên';
+    }
 }
 
 // Hàm mới để hiển thị biểu cảm bay lên
@@ -131,6 +242,8 @@ async function startLocalMedia() {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     const myCard = createVideoCard("me", myName, localStream, true);
     videoGrid.appendChild(myCard);
+    // Sử dụng setTimeout để đảm bảo DOM đã được cập nhật
+    setTimeout(() => updateVideoGridLayout(), 100);
 }
 
 function createPeer(id, name, initiator) {
@@ -163,6 +276,36 @@ function createPeer(id, name, initiator) {
         }
     };
 
+    // ===== ERROR HANDLING: WebRTC Connection State =====
+    pc.oniceconnectionstatechange = () => {
+        console.log(`ICE connection state for ${name}:`, pc.iceConnectionState);
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+            console.error(`WebRTC connection failed/disconnected for ${name}`);
+            showError(`Kết nối với ${name} bị gián đoạn. Đang thử kết nối lại...`);
+            // Thử restart ICE
+            if (pc.iceConnectionState === 'failed') {
+                pc.restartIce();
+            }
+        } else if (pc.iceConnectionState === 'connected') {
+            console.log(`WebRTC connected to ${name}`);
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        console.log(`Connection state for ${name}:`, pc.connectionState);
+        if (pc.connectionState === 'failed') {
+            console.error(`Peer connection failed for ${name}`);
+            showError(`Không thể kết nối với ${name}. Vui lòng kiểm tra mạng.`);
+        } else if (pc.connectionState === 'closed') {
+            console.log(`Peer connection closed for ${name}`);
+        }
+    };
+
+    pc.onerror = (err) => {
+        console.error(`WebRTC error for ${name}:`, err);
+        showError(`Lỗi kết nối với ${name}`);
+    };
+
     if (initiator) {
         // ... (code onnegotiationneeded giữ nguyên)
         pc.onnegotiationneeded = async () => {
@@ -173,6 +316,7 @@ function createPeer(id, name, initiator) {
                 socket.emit("signal", { to: id, signal: pc.localDescription });
             } catch (err) {
                 console.error("Lỗi onnegotiationneeded (cam):", err);
+                showError(`Lỗi khi thiết lập kết nối với ${name}`);
             }
         };
     }
@@ -201,6 +345,21 @@ function showHomeView() {
 // Create Room
 // ===================
 createBtn.onclick = () => {
+    // Validation: Kiểm tra tên người dùng
+    const name = nameInput.value.trim();
+    if (!name || name.length < 2) {
+        showError("Vui lòng nhập tên (ít nhất 2 ký tự)");
+        nameInput.focus();
+        return;
+    }
+    if (name.length > 50) {
+        showError("Tên quá dài (tối đa 50 ký tự)");
+        nameInput.focus();
+        return;
+    }
+
+    setLoading(true);
+    
     // mã phòng và mật khẩu là số ngẫu nhiên 6 chữ số
     const r = String(Math.floor(100000 + Math.random() * 900000)); // 100000-999999
     const p = String(Math.floor(100000 + Math.random() * 900000));
@@ -209,9 +368,16 @@ createBtn.onclick = () => {
     roomPasswordInput.value = p;
 
     socket.emit("createRoom", { roomId: r, password: p }, res => {
+        setLoading(false);
         if (res.success) {
-            alert(`Tạo phòng thành công!\nMã phòng: ${r}\nMật khẩu: ${p}`);
-        } else alert(res.message);
+            showSuccess(`Tạo phòng thành công! Mã phòng: ${r}`);
+            // Tự động join sau khi tạo
+            setTimeout(() => {
+                joinBtn.click();
+            }, 500);
+        } else {
+            showError(res.message || "Không thể tạo phòng");
+        }
     });
 };
 
@@ -224,13 +390,33 @@ joinBtn.onclick = async () => {
     roomId = roomIdInput.value.trim();
     myName = nameInput.value.trim() || "Khách";
 
-    // Thêm kiểm tra
+    // ===== INPUT VALIDATION =====
     if (!roomId) {
-        alert("Vui lòng nhập mã phòng.");
+        showError("Vui lòng nhập mã phòng");
+        roomIdInput.focus();
         statusText.textContent = "Chưa kết nối";
         return;
     }
+    
+    if (roomId.length < 4 || roomId.length > 20) {
+        showError("Mã phòng phải từ 4-20 ký tự");
+        roomIdInput.focus();
+        return;
+    }
 
+    if (!myName || myName.length < 2) {
+        showError("Vui lòng nhập tên (ít nhất 2 ký tự)");
+        nameInput.focus();
+        return;
+    }
+    
+    if (myName.length > 50) {
+        showError("Tên quá dài (tối đa 50 ký tự)");
+        nameInput.focus();
+        return;
+    }
+
+    setLoading(true);
     statusText.textContent = "Đang kết nối...";
     
     // Reset hàng đợi (quan trọng nếu join thất bại và thử lại)
@@ -238,19 +424,22 @@ joinBtn.onclick = async () => {
 
     // Gửi yêu cầu tham gia TỚI MÁY CHỦ
     socket.emit("joinRoom", { roomId, password: roomPasswordInput.value, name: myName }, async (res) => { // Thêm 'async'
+        setLoading(false);
         if (!res.success) {
-            // Thất bại: Chỉ cần thông báo. 
-            alert(res.message);
+            // Thất bại: Hiển thị lỗi
+            showError(res.message || "Không thể tham gia phòng");
             joined = false;
             statusText.textContent = "Kết nối thất bại";
         } else {
             // THÀNH CÔNG:
             try {
+                statusText.textContent = "Đang khởi động camera...";
                 // 1. Bật camera (logic đã sửa)
                 await startLocalMedia(); 
                 joined = true;
                 
                 statusText.textContent = "Đã vào phòng!";
+                showSuccess("Đã tham gia phòng thành công!");
                 canChat = true;
                 showMeetingView(); 
 
@@ -261,9 +450,18 @@ joinBtn.onclick = async () => {
             } catch (err) {
                 // Lỗi camera
                 console.error("Không thể lấy media:", err);
-                statusText.textContent = "Lỗi: Không thể lấy camera/micro";
+                let errorMsg = "Không thể lấy camera/micro";
+                if (err.name === 'NotAllowedError') {
+                    errorMsg = "Bạn đã từ chối quyền truy cập camera/micro";
+                } else if (err.name === 'NotFoundError') {
+                    errorMsg = "Không tìm thấy camera/micro";
+                } else if (err.name === 'NotReadableError') {
+                    errorMsg = "Camera/micro đang được sử dụng bởi ứng dụng khác";
+                }
+                showError(errorMsg);
+                statusText.textContent = "Lỗi: " + errorMsg;
                 joined = false;
-                socket.disconnect(); // Ngắt kết nối luôn
+                socket.emit("leaveRoom"); // Thông báo server
             }
         }
     });
@@ -286,22 +484,6 @@ function updateFloatingCopyVisibility() {
 }
 updateFloatingCopyVisibility(); // initial
 
-// call updateFloatingCopyVisibility when switching views
-function showMeetingView() {
-    document.getElementById("home").style.display = "none";
-    document.getElementById("meeting").style.display = "grid";
-    document.getElementById("controls").style.display = "flex";
-    currentRoomId.textContent = roomId;
-    updateFloatingCopyVisibility();
-}
-
-function showHomeView() {
-    document.getElementById("home").style.display = "flex";
-    document.getElementById("meeting").style.display = "none";
-    document.getElementById("controls").style.display = "none";
-    updateFloatingCopyVisibility();
-}
-
 // floating copy action
 copyRoomFloatingBtn.onclick = () => {
     const rid = roomId || roomIdInput.value || currentRoomId.textContent || "";
@@ -323,12 +505,33 @@ copyRoomFloatingBtn.onclick = () => {
 // ===================
 // Chat
 // ===================
-sendBtn.onclick = () => {
+function sendChatMessage() {
+    if (!canChat) {
+        showError("Bạn chưa tham gia phòng");
+        return;
+    }
+    
     const msg = chatInput.value.trim();
     if (!msg) return;
+    
+    if (msg.length > 1000) {
+        showError("Tin nhắn quá dài (tối đa 1000 ký tự)");
+        return;
+    }
+    
     socket.emit("chatMessage", msg);
     chatInput.value = "";
-};
+}
+
+sendBtn.onclick = sendChatMessage;
+
+// ===== ENTER KEY HANDLER FOR CHAT =====
+chatInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
+});
 
 // small helper to avoid HTML injection
 function escapeHtml(s) {
@@ -414,6 +617,9 @@ socket.on("user-connected", ({ id, name }) => {
             const pc = createScreenPeer(id, vTrack, aTrack);
             screenPeers[id] = pc;
         }
+        
+        // Cập nhật layout sau khi thêm người mới - dùng setTimeout để đảm bảo DOM đã được cập nhật
+        setTimeout(() => updateVideoGridLayout(), 100);
     }
 });
 
@@ -448,6 +654,9 @@ socket.on("user-disconnected", id => {
             screenPeers[id].close();
             delete screenPeers[id];
         }
+        
+        // Cập nhật layout sau khi người dùng rời đi - dùng setTimeout để đảm bảo DOM đã được cập nhật
+        setTimeout(() => updateVideoGridLayout(), 100);
     }
 });
 socket.on('sharing-started-you', ({ screenShareId }) => {
@@ -511,6 +720,8 @@ socket.on("signal", async ({ from, signal, name }) => {
         if (!peers[from]) {
             peers[from] = { pc: null, el: createVideoCard(from, name), name };
             videoGrid.appendChild(peers[from].el);
+            // Cập nhật layout khi có người mới - dùng setTimeout để đảm bảo DOM đã được cập nhật
+            setTimeout(() => updateVideoGridLayout(), 100);
         }
         pc = createPeer(from, peers[from].name, false);
         
@@ -590,6 +801,8 @@ leaveBtn.onclick = () => {
     chatMessages.innerHTML = "";
     joined = false;
     canChat = false;
+    // Xóa layout classes khi rời phòng
+    videoGrid.classList.remove('layout-1', 'layout-2', 'layout-3plus');
     // socket.emit("leaveRoom"); // Dòng này không cần thiết
     socket.disconnect(); // Ngắt kết nối luôn
     showHomeView(); // Quay về trang chủ
@@ -672,6 +885,8 @@ shareScreenBtn.onclick = async () => {
         
         // Báo cho server biết tôi muốn chia sẻ
         socket.emit("start-sharing", { name: myName + " (Màn hình)" });
+        shareScreenBtn.textContent = "Dừng chia sẻ";
+        showSuccess("Đã bắt đầu chia sẻ màn hình");
 
         // Lắng nghe sự kiện "Stop" từ nút của trình duyệt
         localScreenStream.getTracks()[0].onended = () => {
@@ -680,6 +895,15 @@ shareScreenBtn.onclick = async () => {
 
     } catch (err) {
         console.error("Lỗi getDisplayMedia:", err);
+        let errorMsg = "Không thể chia sẻ màn hình";
+        if (err.name === 'NotAllowedError') {
+            errorMsg = "Bạn đã từ chối quyền chia sẻ màn hình";
+        } else if (err.name === 'NotFoundError') {
+            errorMsg = "Không tìm thấy màn hình để chia sẻ";
+        } else if (err.name === 'NotReadableError') {
+            errorMsg = "Không thể truy cập màn hình";
+        }
+        showError(errorMsg);
     }
 };
 function createScreenPeer(targetId, vTrack, aTrack) {
@@ -688,6 +912,28 @@ function createScreenPeer(targetId, vTrack, aTrack) {
 
     if (vTrack) pc.addTrack(vTrack, localScreenStream);
     if (aTrack) pc.addTrack(aTrack, localScreenStream);
+
+    // ===== ERROR HANDLING: Screen Share WebRTC =====
+    pc.oniceconnectionstatechange = () => {
+        console.log(`Screen share ICE state for ${targetId}:`, pc.iceConnectionState);
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+            console.error(`Screen share connection failed for ${targetId}`);
+            if (pc.iceConnectionState === 'failed') {
+                pc.restartIce();
+            }
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        console.log(`Screen share connection state for ${targetId}:`, pc.connectionState);
+        if (pc.connectionState === 'failed') {
+            console.error(`Screen share peer connection failed for ${targetId}`);
+        }
+    };
+
+    pc.onerror = (err) => {
+        console.error(`Screen share WebRTC error for ${targetId}:`, err);
+    };
 
     pc.onnegotiationneeded = async () => {
         try {
@@ -700,6 +946,7 @@ function createScreenPeer(targetId, vTrack, aTrack) {
             });
         } catch (err) {
             console.error("Lỗi onnegotiationneeded (screen):", err);
+            showError("Lỗi khi thiết lập chia sẻ màn hình");
         }
     };
 
@@ -725,6 +972,7 @@ function stopScreenShare() {
     if (localScreenCard) localScreenCard.remove();
     
     myScreenShareId = null;
+    shareScreenBtn.textContent = "Chia sẻ màn hình";
 
     // Báo server
     socket.emit("stop-sharing");
@@ -732,6 +980,8 @@ function stopScreenShare() {
     // Đóng tất cả peer kết nối màn hình
     Object.values(screenPeers).forEach(pc => pc.close());
     screenPeers = {};
+    
+    showSuccess("Đã dừng chia sẻ màn hình");
 }
 
 // ===================
@@ -772,4 +1022,79 @@ document.addEventListener("click", (e) => {
   if (!reactionContainer.contains(e.target) && reactionPopup.classList.contains("visible")) {
     reactionPopup.classList.remove("visible");
   }
+});
+
+// ===================
+// Socket Error & Reconnection Handling
+// ===================
+socket.on('connect', () => {
+    console.log('✅ Đã kết nối với server');
+    if (statusText) {
+        statusText.textContent = "Đã kết nối";
+    }
+});
+
+socket.on('disconnect', (reason) => {
+    console.log('❌ Mất kết nối:', reason);
+    
+    if (joined) {
+        showError("Mất kết nối với server. Đang thử kết nối lại...");
+        statusText.textContent = "Đang kết nối lại...";
+    } else {
+        statusText.textContent = "Chưa kết nối";
+    }
+    
+    // Nếu server disconnect, không tự động reconnect
+    // Nếu mất kết nối mạng, socket.io sẽ tự động reconnect
+    if (reason === 'io server disconnect') {
+        // Server đã ngắt kết nối, cần reconnect thủ công
+        socket.connect();
+    }
+});
+
+socket.on('reconnect', (attemptNumber) => {
+    console.log('✅ Đã kết nối lại sau', attemptNumber, 'lần thử');
+    showSuccess("Đã kết nối lại với server");
+    
+    if (joined && roomId) {
+        // Nếu đang trong phòng, thử join lại
+        statusText.textContent = "Đang tham gia lại phòng...";
+        socket.emit("joinRoom", { 
+            roomId, 
+            password: roomPasswordInput.value, 
+            name: myName 
+        }, async (res) => {
+            if (res.success) {
+                showSuccess("Đã tham gia lại phòng thành công");
+                statusText.textContent = "Đã vào phòng!";
+            } else {
+                showError("Không thể tham gia lại phòng: " + res.message);
+                statusText.textContent = "Kết nối thất bại";
+                joined = false;
+            }
+        });
+    }
+});
+
+socket.on('reconnect_attempt', (attemptNumber) => {
+    console.log('🔄 Đang thử kết nối lại... Lần thử:', attemptNumber);
+    if (statusText) {
+        statusText.textContent = `Đang kết nối lại... (${attemptNumber})`;
+    }
+});
+
+socket.on('reconnect_error', (error) => {
+    console.error('❌ Lỗi khi kết nối lại:', error);
+    showError("Không thể kết nối lại với server");
+});
+
+socket.on('reconnect_failed', () => {
+    console.error('❌ Không thể kết nối lại sau nhiều lần thử');
+    showError("Không thể kết nối với server. Vui lòng tải lại trang.");
+    statusText.textContent = "Kết nối thất bại";
+});
+
+socket.on('error', (error) => {
+    console.error('❌ Socket error:', error);
+    showError("Lỗi kết nối: " + (error.message || "Lỗi không xác định"));
 });

@@ -8,8 +8,8 @@ console.log("Starting HTTPS server...");
 const app = express();
 app.use(express.static('public'));
 
-let keyPath = '192.168.0.103+2-key.pem';
-let certPath = '192.168.0.103+2.pem';
+let keyPath = '192.168.1.117+2-key.pem';
+let certPath = '192.168.1.117+2.pem';
 let server;
 try {
   server = https.createServer({
@@ -339,4 +339,4 @@ socket.on('disconnect', reason => {
 
 
 const PORT = 3000;
-server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.0.103:${PORT}`));
+server.listen(PORT, () => console.log(`✅ HTTPS running: https://192.168.1.117:${PORT}`));
