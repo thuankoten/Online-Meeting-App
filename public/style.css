@@ -245,47 +245,85 @@ body {
 /* ===== VIDEO GRID ===== */
 #videoGrid {
     display: grid;
-    grid-auto-rows: min-content;
-    gap: 12px;
+    /* tự động gói theo số lượng, mỗi card tối thiểu 280px, tối đa 1fr */
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    /* hàng có thể mở rộng để cards lớn lên thay vì dàn trên 1 hàng */
+    grid-auto-rows: minmax(180px, 1fr);
+    grid-auto-flow: dense;
+    gap: 16px;
     padding: 12px;
     overflow-y: auto;
     background: linear-gradient(180deg, rgba(13,13,20,0.3), rgba(8,8,14,0.28));
     border-radius: 10px;
-    min-height: 300px;
+    min-height: 320px;
     align-content: start;
+    align-items: stretch;
     height: 100%;
 }
-
-/* Layout 1 người: Chiếm 100% màn hình */
+/* Layout 1 người: làm lớn và canh giữa */
 #videoGrid.layout-1 {
     grid-template-columns: 1fr;
-    grid-template-rows: 1fr;
+    grid-auto-rows: 1fr;
+    align-items: stretch;
+    justify-items: center;
 }
-
 #videoGrid.layout-1 .cam-card {
-    width: 100%;
-    height: 100%;
-    min-width: 0; /* Quan trọng: cho phép card co lại trong grid */
-    min-height: 0; /* Quan trọng: cho phép card co lại trong grid */
+    width: min(1100px, 100%);
+    max-height: calc(100vh - 220px);
+    aspect-ratio: 16 / 9;
 }
 
-/* Layout 2 người: Mỗi người 50% */
+/* Layout 2 người: Mỗi người 50% (vẫn responsive) */
 #videoGrid.layout-2 {
-    grid-template-columns: repeat(2, 1fr);
-    grid-template-rows: 1fr;
-    gap: 12px;
-}
-
-#videoGrid.layout-2 .cam-card {
-    width: 100%;
-    height: 100%;
-    min-width: 0; /* Quan trọng: cho phép card co lại trong grid */
-    min-height: 0; /* Quan trọng: cho phép card co lại trong grid */
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
+    grid-auto-rows: 1fr;
+    gap: 16px;
 }
 
 /* Layout 3+ người: Tự động chia đều */
 #videoGrid.layout-3plus {
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-auto-rows: minmax(160px, 1fr);
+}
+
+/* Exact 2x2 layout (use when there are 4 cams) */
+#videoGrid.layout-2x2 {
+    grid-template-columns: repeat(2, 1fr);
+    /* chia đều 2 hàng - trừ gap giữa các hàng */
+    grid-auto-rows: calc((100% - 16px) / 2);
+    gap: 16px;
+    align-items: stretch;
+    align-content: stretch;
+}
+
+/* đảm bảo cam-card chiếm đầy ô lưới trong layout 2x2 */
+#videoGrid.layout-2x2 .cam-card {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    aspect-ratio: 16/9;
+    border-radius: 12px;
+    transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+/* video fill fix for 2x2 */
+#videoGrid.layout-2x2 .cam-card video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* responsive fallback: stack on small screens */
+@media (max-width: 760px) {
+    #videoGrid.layout-2x2 {
+        grid-template-columns: 1fr;
+        grid-auto-rows: minmax(180px, 1fr);
+    }
+    #videoGrid.layout-2x2 .cam-card {
+        aspect-ratio: 16/9;
+    }
 }
 
 /* Cam card - framed with soft border and hover lift */
@@ -297,20 +335,27 @@ body {
     border: 1px solid rgba(255,255,255,0.035);
     box-shadow: 0 6px 18px rgba(2,6,23,0.45);
     transition: transform 180ms ease, box-shadow 180ms ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    /* Giữ tỷ lệ khung hình 16:9 cố định */
+    /* let the grid control sizing */
+    display: block;
     aspect-ratio: 16 / 9;
-    width: 100%;
+    min-width: 0;
     min-height: 0;
+    height: 100%;
+    width: 100%;
+}
+/* active speaker highlight */
+.cam-card.active {
+    transform: translateY(-6px) scale(1.02);
+    box-shadow: 0 28px 64px rgba(46,204,182,0.12);
+    border-color: rgba(126,231,199,0.16);
+    z-index: 2;
 }
 .cam-card:hover {
     transform: translateY(-6px);
     box-shadow: 0 18px 48px rgba(2,6,23,0.6);
 }
 
-/* video fit and fallback bg */
+/* video fit and fallback bg (keep absolute to allow overlay) */
 .cam-card video { 
     object-fit: cover; 
     width: 100%; 

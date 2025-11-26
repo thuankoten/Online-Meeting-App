@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.1.7:3000", { 
+const socket = io("https://192.168.1.2:3000", { 
     secure: true,
     reconnection: true,
     reconnectionDelay: 1000,
@@ -71,7 +71,6 @@ function processExistingUsers(users) {
 // ===== FUNCTION: Cập nhật layout video grid dựa trên số lượng người =====
 function updateVideoGridLayout() {
     // Đếm số lượng cam-card thật (không tính screen sharing)
-    // Đếm tất cả cam-card trong videoGrid, loại trừ những card có class "is-sharing"
     const allCards = videoGrid.querySelectorAll('.cam-card');
     const peopleCards = Array.from(allCards).filter(card => 
         !card.classList.contains('is-sharing')
@@ -80,15 +79,17 @@ function updateVideoGridLayout() {
     const totalPeople = peopleCards.length;
     
     // Xóa tất cả classes layout cũ
-    videoGrid.classList.remove('layout-1', 'layout-2', 'layout-3plus');
+    videoGrid.classList.remove('layout-1', 'layout-2', 'layout-2x2', 'layout-3plus');
     
     // Áp dụng layout dựa trên số lượng người
     if (totalPeople === 1) {
         videoGrid.classList.add('layout-1'); // 1 người: 100%
     } else if (totalPeople === 2) {
         videoGrid.classList.add('layout-2'); // 2 người: 50% mỗi người
+    } else if (totalPeople === 4) {
+        videoGrid.classList.add('layout-2x2'); // 4 người: chính xác 2x2
     } else if (totalPeople > 2) {
-        videoGrid.classList.add('layout-3plus'); // 3+ người: chia đều
+        videoGrid.classList.add('layout-3plus'); // 3+ (không phải 4) người: chia đều
     }
     
     console.log(`Layout updated: ${totalPeople} người`, {
@@ -893,7 +894,7 @@ leaveBtn.onclick = () => {
     joined = false;
     canChat = false;
     // Xóa layout classes khi rời phòng
-    videoGrid.classList.remove('layout-1', 'layout-2', 'layout-3plus');
+    videoGrid.classList.remove('layout-1', 'layout-2', 'layout-2x2', 'layout-3plus');
     // socket.emit("leaveRoom"); // Dòng này không cần thiết
     socket.disconnect(); // Ngắt kết nối luôn
     showHomeView(); // Quay về trang chủ
