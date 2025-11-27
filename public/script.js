@@ -3,7 +3,7 @@
 // ===================
 
 // ===== Socket.io =====
-const socket = io("https://192.168.1.2:3000", { 
+const socket = io("https://192.168.1.201:3000", { 
     secure: true,
     reconnection: true,
     reconnectionDelay: 1000,
@@ -75,26 +75,42 @@ function updateVideoGridLayout() {
     const peopleCards = Array.from(allCards).filter(card => 
         !card.classList.contains('is-sharing')
     );
+    const screenShareCards = Array.from(allCards).filter(card => 
+        card.classList.contains('is-sharing')
+    );
     
     const totalPeople = peopleCards.length;
+    
+    // Đảm bảo màn hình chia sẻ luôn ở đầu tiên
+    screenShareCards.forEach(screenCard => {
+        videoGrid.prepend(screenCard);
+    });
     
     // Xóa tất cả classes layout cũ
     videoGrid.classList.remove('layout-1', 'layout-2', 'layout-2x2', 'layout-3plus');
     
     // Áp dụng layout dựa trên số lượng người
-    if (totalPeople === 1) {
-        videoGrid.classList.add('layout-1'); // 1 người: 100%
+    // Nếu có màn hình chia sẻ, luôn dùng layout có thể scroll
+const hasScreenShare = screenShareCards.length > 0;
+    
+    if (hasScreenShare) {
+        // Ưu tiên cao nhất: Có share screen -> Layout cuộn
+        videoGrid.classList.add('layout-3plus');
+    } else if (totalPeople === 1) {
+        videoGrid.classList.add('layout-1');
     } else if (totalPeople === 2) {
-        videoGrid.classList.add('layout-2'); // 2 người: 50% mỗi người
+        videoGrid.classList.add('layout-2');
     } else if (totalPeople === 4) {
-        videoGrid.classList.add('layout-2x2'); // 4 người: chính xác 2x2
-    } else if (totalPeople > 2) {
-        videoGrid.classList.add('layout-3plus'); // 3+ (không phải 4) người: chia đều
+        videoGrid.classList.add('layout-2x2');
+    } else {
+        // 3 người hoặc > 4 người -> Layout cuộn
+        videoGrid.classList.add('layout-3plus');
     }
     
     console.log(`Layout updated: ${totalPeople} người`, {
         allCards: allCards.length,
         peopleCards: peopleCards.length,
+        screenShares: screenShareCards.length,
         layout: videoGrid.className
     });
     
@@ -689,7 +705,8 @@ socket.on("user-connected", ({ id, name }) => {
         console.log("Một màn hình đã tham gia:", name);
         peers[id] = { pc: null, el: createVideoCard(id, name), name };
         peers[id].el.classList.add("is-sharing"); 
-        videoGrid.appendChild(peers[id].el);
+        // Đặt màn hình chia sẻ ở đầu tiên
+        videoGrid.prepend(peers[id].el);
     } else {
         // == Đây là một NGƯỜI DÙNG thật MỚI ==
         console.log("Một người dùng MỚI đã tham gia:", name);
@@ -784,7 +801,8 @@ socket.on("signal", async ({ from, signal, name }) => {
         if (!peers[from]) {
             peers[from] = { pc: null, el: createVideoCard(from, name), name };
             peers[from].el.classList.add("is-sharing");
-            videoGrid.appendChild(peers[from].el);
+            // Đặt màn hình chia sẻ ở đầu tiên
+            videoGrid.prepend(peers[from].el);
         }
 
         // Tạo peer (non-initiator)

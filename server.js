@@ -9,8 +9,8 @@ const app = express();
 app.use(express.static("public"));
 
 // ---- TLS ----
-const key = fs.readFileSync("192.168.1.2+2-key.pem");
-const cert = fs.readFileSync("192.168.1.2+2.pem");
+const key = fs.readFileSync("192.168.1.201+2-key.pem");
+const cert = fs.readFileSync("192.168.1.201+2.pem");
 const server = https.createServer({ key, cert }, app);
 
 // ---- Socket.IO ----
@@ -251,4 +251,4 @@ io.on("connection", socket => {
 });
 
 // ---- Start server ----
-server.listen(3000, () => console.log("HTTPS: https://192.168.1.2:3000"));
+server.listen(3000, () => console.log("HTTPS: https://192.168.1.201:3000"));
